@@ -257,3 +257,42 @@ test('改行が CRLF でも LF でも同じ結果になる', () => {
   const crlf = lf.replace(/\n/g, '\r\n');
   assert.deepEqual(parseDxf(lf).entities, parseDxf(crlf).entities);
 });
+
+// ============================================================
+// 実際のお客様の図面（参考図.dxf）で見つかった不具合の再発防止
+//
+// この2件は、手で書いた見本では見つかりませんでした。
+// 実物を読ませて初めて分かったものです。
+// ============================================================
+
+test('「Shift-JISです」と書いてあってもUTF-8の図面を、正しく読む', () => {
+  // 新しいAutoCAD（AC1021以降）は $DWGCODEPAGE に ANSI_932 と書いたまま、
+  // 中身をUTF-8で保存する。申告を信じると、レイヤー名「図面枠」が
+  // 「蝗ｳ髱｢譫」のように化ける（実際に化けた）。
+  const bytes = readFileSync(join(FIXTURES, 'utf8-mislabeled.dxf'));
+  const d = parseDxf(decodeDxfBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)));
+
+  const names = d.layers.map((l) => l.name);
+  assert.ok(names.includes('既設PIPE'), `レイヤー名が化けている: ${JSON.stringify(names)}`);
+  assert.ok(names.includes('図面枠'), `レイヤー名が化けている: ${JSON.stringify(names)}`);
+});
+
+test('度・径・±の記号が、読める記号になる', () => {
+  // 図面には「45%%D」と書かれている。そのまま出すと現場で読めない。
+  const d = load('utf8-mislabeled.dxf');
+  const texts = only(d, 'text').map((t) => t.text);
+  assert.ok(texts.includes('45°'), `度記号になっていない: ${JSON.stringify(texts)}`);
+  assert.ok(
+    texts.some((t) => t.includes('φ') && t.includes('±')),
+    `径・±の記号になっていない: ${JSON.stringify(texts)}`
+  );
+  assert.ok(!texts.some((t) => t.includes('%%')), '記号の書き方がそのまま残っている');
+});
+
+test('レイヤーに従う色が、日本語のレイヤー名でも正しく引ける', () => {
+  // レイヤー名が化けると、色を引く相手が見つからず図面が真っ黒になる
+  const d = load('utf8-mislabeled.dxf');
+  const line = only(d, 'line')[0];
+  assert.equal(line.layer, '既設PIPE');
+  assert.equal(line.color, '#ff0000', '日本語レイヤーの色が引けていない');
+});

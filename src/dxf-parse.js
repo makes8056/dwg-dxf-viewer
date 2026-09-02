@@ -27,34 +27,61 @@ import {
 /**
  * DXFファイルのバイト列を、正しい文字コードで文字列にする。
  *
- * やり方：
- *   1. まずUTF-8として読んでみる
- *   2. ヘッダーの $DWGCODEPAGE を探す。ANSI_932（日本語のShift-JIS）なら、
- *      同じバイト列をもう一度 Shift-JIS として読み直す
- *   3. 判定できないときはUTF-8のまま使う
+ * 【実際の図面で起きた不具合。ここを間違えると日本語が全部化けます】
  *
- * @param {ArrayBuffer} buffer
+ * DXFのヘッダーには「この図面の文字コードは何か」を書く欄（$DWGCODEPAGE）があります。
+ * ところが **新しいAutoCADは、ここに ANSI_932（Shift-JIS）と書いたまま、
+ * 中身をUTF-8で保存します。** 申告と中身が違うのです。
+ * お客様の参考図.dxf がまさにこれで、申告を信じた結果
+ * レイヤー名「図面枠」が「蝗ｳ髱｢譫」のように化けました。
+ *
+ * そこで、申告を鵜呑みにせず、次の順で決めます。
+ *   1. DXFの版が AC1021（AutoCAD 2007）以降なら、**決まりとしてUTF-8**。申告は見ない
+ *   2. それより古い版でも、バイト列がUTF-8として矛盾なく読めるならUTF-8
+ *      （日本語のShift-JISは、UTF-8として読むとほぼ必ず矛盾が出るため見分けられます）
+ *   3. UTF-8として読めないなら、Shift-JISとして読む
+ *
+ * @param {ArrayBuffer|Uint8Array} buffer
  * @returns {string}
  */
 export function decodeDxfBuffer(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let utf8Text;
-  try {
-    utf8Text = new TextDecoder('utf-8').decode(bytes);
-  } catch {
-    utf8Text = '';
-  }
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
 
-  const codepage = findCodepage(utf8Text);
-  if (codepage && isShiftJisCodepage(codepage)) {
+  // 壊れた文字をそのまま置き換えて読む版（判定と、最後の頼みの綱に使う）
+  const lossyUtf8 = new TextDecoder('utf-8').decode(bytes);
+
+  // 1. 版が新しければ、無条件にUTF-8
+  if (isUtf8ByVersion(lossyUtf8)) return lossyUtf8;
+
+  // 2. バイト列がUTF-8として矛盾なく読めるか厳しく確かめる
+  let strictUtf8 = null;
+  try {
+    strictUtf8 = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    strictUtf8 = null; // UTF-8としては読めない＝別の文字コード
+  }
+  if (strictUtf8 !== null) return strictUtf8;
+
+  // 3. UTF-8として読めなかった。申告がShift-JISなら、あるいは申告が無くても
+  //    日本語の古い図面はShift-JISのことがほとんどなので、Shift-JISとして読む
+  const codepage = findCodepage(lossyUtf8);
+  if (!codepage || isShiftJisCodepage(codepage)) {
     try {
       return new TextDecoder('shift_jis').decode(bytes);
     } catch {
-      // Shift-JISで読めない環境なら、UTF-8のまま諦める
-      return utf8Text;
+      return lossyUtf8; // Shift-JISが使えない環境なら諦める
     }
   }
-  return utf8Text;
+  return lossyUtf8;
+}
+
+// DXFの版（$ACADVER）が AC1021（AutoCAD 2007）以降かどうか。
+// この版から、DXFの文字は必ずUTF-8で書かれる決まりになった。
+// $DWGCODEPAGE の欄は残っているが、中身と食い違うことがあるので信用しない。
+function isUtf8ByVersion(text) {
+  const m = text.match(/\$ACADVER\s*[\r\n]+\s*1\s*[\r\n]+\s*AC(\d{4})/);
+  if (!m) return false;
+  return Number(m[1]) >= 1021;
 }
 
 // $DWGCODEPAGE の値（例 "ANSI_932"）をヘッダーの中から探す。
@@ -585,7 +612,7 @@ function convertText(rec, drawing, ctx, layerColorMap) {
   const y = num(firstValue(g, 20));
   const height = num(firstValue(g, 40), 2.5);
   const rotation = mirrorRotation(flip, num(firstValue(g, 50)));
-  const text = String(firstValue(g, 1) ?? '');
+  const text = expandControlCodes(firstValue(g, 1));
   emitText(drawing, ctx, layer, color, x, y, height, rotation, text);
 }
 
@@ -610,6 +637,44 @@ function convertMText(rec, drawing, ctx, layerColorMap) {
 }
 
 // MTEXTの書式指定を取り除いて、素の文字だけにする
+/**
+ * CADの文字に埋め込まれた「記号の書き方」を、本当の記号に置き換える。
+ *
+ * 【実際の図面で見つかった不具合】
+ * お客様の参考図.dxf に「45%%D」という文字がありました。
+ * これはCADの決まりで「45度」を表す書き方ですが、そのまま出すと
+ * 画面に「45%%D」と出てしまい、現場で読めません。
+ *
+ * 置き換える記号：
+ *   %%d → °（度）    %%c → φ（径）    %%p → ±    %%% → %
+ *   %%u %%o → 下線・上線の指示。画面では使わないので取り除く
+ *
+ * φについて：CADの元の記号は「⌀」ですが、日本の管工事の図面では「φ」で読むのが
+ * 普通で、字体によっては「⌀」が四角い箱になって読めないことがあります。
+ * 現場で読めることを優先して「φ」にしています。
+ *
+ * @param {string} raw
+ * @returns {string}
+ */
+export function expandControlCodes(raw) {
+  let s = String(raw ?? '');
+  // %%nnn（文字コードを数字で指定する書き方）を先に処理する。
+  // 例：%%176 は度記号。3桁の数字だけを対象にする。
+  s = s.replace(/%%(\d{3})/g, (whole, digits) => {
+    const code = Number(digits);
+    // 128〜255 はCADの古い文字コード。よく使う度記号(176)だけ確実に直す
+    if (code === 176) return '°';
+    if (code < 32 || code > 126) return whole; // 分からないものは触らない
+    return String.fromCharCode(code);
+  });
+  s = s.replace(/%%[dD]/g, '°');
+  s = s.replace(/%%[cC]/g, 'φ');
+  s = s.replace(/%%[pP]/g, '±');
+  s = s.replace(/%%[uUoO]/g, ''); // 下線・上線の指示は画面では使わない
+  s = s.replace(/%%%/g, '%');
+  return s;
+}
+
 function cleanMText(raw) {
   let s = String(raw ?? '');
   s = s.replace(/\\P/g, '\n'); // 改行
@@ -623,7 +688,8 @@ function cleanMText(raw) {
   s = s.replace(/[{}]/g, '');
   // エスケープされていた文字を戻す
   s = s.replace(/\\\\/g, '\\');
-  return s;
+  // 度・径・±などの記号の書き方を、本当の記号に置き換える
+  return expandControlCodes(s);
 }
 
 function convertLwpolyline(rec, drawing, ctx, layerColorMap) {
