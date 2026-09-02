@@ -30,6 +30,7 @@ function makeFakeCtx(pixelWidth, pixelHeight) {
     lineTo: record('lineTo'),
     stroke: record('stroke'),
     arc: record('arc'),
+    ellipse: record('ellipse'),
     fillText: record('fillText'),
     translate: record('translate'),
     rotate: record('rotate'),
@@ -206,4 +207,84 @@ test('そろえ方の指定が無い文字は、これまでどおり左端・�
   renderDrawing(ctx, drawing, vp, {});
   assert.equal(ctx.textAlign, 'left');
   assert.equal(ctx.textBaseline, 'alphabetic');
+});
+
+test('楕円が描かれる', () => {
+  const ctx = makeFakeCtx(1000, 600);
+  const vp = createViewport(1000, 600);
+  fitToBounds(vp, { minX: 0, minY: 0, maxX: 100, maxY: 60 });
+  const drawing = {
+    ...SAMPLE,
+    entities: [
+      { type: 'ellipse', layer: '0', color: '#000', cx: 50, cy: 30,
+        rx: 20, ry: 10, rotation: 0, startAngle: 0, endAngle: 360 },
+    ],
+  };
+  const res = renderDrawing(ctx, drawing, vp, {});
+  assert.equal(res.drawn, 1, '楕円が描かれていない');
+  assert.ok(ctx.calls.some((c) => c[0] === 'ellipse'), '楕円を描く命令が出ていない');
+});
+
+test('大きさが0の楕円は描かない（落ちない）', () => {
+  const ctx = makeFakeCtx(1000, 600);
+  const vp = createViewport(1000, 600);
+  fitToBounds(vp, { minX: 0, minY: 0, maxX: 100, maxY: 60 });
+  const drawing = {
+    ...SAMPLE,
+    entities: [
+      { type: 'ellipse', layer: '0', color: '#000', cx: 50, cy: 30,
+        rx: 0, ry: 0, rotation: 0, startAngle: 0, endAngle: 360 },
+    ],
+  };
+  const res = renderDrawing(ctx, drawing, vp, {});
+  assert.equal(res.drawn, 0);
+});
+
+test('ぐるっと一周する楕円が、ちゃんと一周ぶん描かれる', () => {
+  // 角度は0〜360度に直してあるので、一周の楕円は「0度→0度」になる。
+  // そのまま描くと長さ0の弧になり、**何も描かれない**。
+  // 実物の図面には一周の楕円が100個以上あるので、ここは必ず要る。
+  const ctx = makeFakeCtx(1000, 600);
+  const vp = createViewport(1000, 600);
+  fitToBounds(vp, { minX: 0, minY: 0, maxX: 100, maxY: 60 });
+  const drawing = {
+    ...SAMPLE,
+    entities: [
+      { type: 'ellipse', layer: '0', color: '#000', cx: 50, cy: 30,
+        rx: 20, ry: 10, rotation: 0, startAngle: 0, endAngle: 0 },
+    ],
+  };
+  const res = renderDrawing(ctx, drawing, vp, {});
+  assert.equal(res.drawn, 1, '一周の楕円が描かれていない');
+
+  const call = ctx.calls.find((c) => c[0] === 'ellipse');
+  assert.ok(call, '楕円を描く命令が出ていない');
+  const startRad = call[6];
+  const endRad = call[7];
+  const sweep = Math.abs(endRad - startRad);
+  assert.ok(
+    Math.abs(sweep - Math.PI * 2) < 1e-9,
+    `一周ぶん描いていない（実際の回り幅は ${sweep} ラジアン、正しくは ${Math.PI * 2}）`
+  );
+});
+
+test('部分的な楕円（C字）は、その範囲だけ描く', () => {
+  const ctx = makeFakeCtx(1000, 600);
+  const vp = createViewport(1000, 600);
+  fitToBounds(vp, { minX: 0, minY: 0, maxX: 100, maxY: 60 });
+  const drawing = {
+    ...SAMPLE,
+    entities: [
+      // 実物の図面にあった値：305度から235度まで（290度ぶん。70度あいている）
+      { type: 'ellipse', layer: '0', color: '#000', cx: 50, cy: 30,
+        rx: 20, ry: 10, rotation: 90, startAngle: 305, endAngle: 235 },
+    ],
+  };
+  renderDrawing(ctx, drawing, vp, {});
+  const call = ctx.calls.find((c) => c[0] === 'ellipse');
+  const sweepDeg = (Math.abs(call[7] - call[6]) * 180) / Math.PI;
+  assert.ok(
+    Math.abs(sweepDeg - 290) < 1e-6,
+    `回り幅が290度になっていない（実際は ${sweepDeg}度）`
+  );
 });

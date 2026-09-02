@@ -165,11 +165,12 @@ test('24ビットの色指定（true color）も読める', () => {
 test('対応していない図形は、捨てずに種類ごとに数える', () => {
   // 黙って消すと、現場で図面が欠けていることに気づけない。これがいちばん危ない。
   const d = load('unsupported.dxf');
-  assert.equal(d.entities.length, 1, '対応している直線1本だけが残るはず');
-  assert.equal(d.unsupported.count, 4);
+  // 直線1本 ＋ 楕円1個（v0.1.6で対応した）
+  assert.equal(d.entities.length, 2, '対応している図形が残っていない');
+  assert.equal(d.unsupported.count, 3);
   assert.equal(d.unsupported.kinds.SPLINE, 2);
   assert.equal(d.unsupported.kinds.HATCH, 1);
-  assert.equal(d.unsupported.kinds.ELLIPSE, 1);
+  assert.equal(d.unsupported.kinds.ELLIPSE, undefined, '楕円はもう対応しているので数えない');
 });
 
 // ============================================================
@@ -457,4 +458,48 @@ test('中身がレイヤー0以外なら、そのレイヤーのまま（置い�
   assert.ok(line, 'レイヤー「枠」の線が見つからない');
   assert.equal(line.layer, '枠', 'レイヤー0以外まで置いた側に従わせている');
   assert.equal(line.color, '#0000ff', 'レイヤー「枠」の青になっていない');
+});
+
+// ============================================================
+// 楕円（ELLIPSE）と、印刷レイアウトののぞき窓（VIEWPORT）
+//
+// 実物の参考図.dxf に楕円が2個あり、表示できていなかった。
+// 配管の図面では、斜めから見た管の口などによく使われる。
+// ============================================================
+
+test('楕円が読める。長い半径・短い半径・傾きが正しい', () => {
+  // 中心(100,50)、長いほうの軸の端が中心から (0,20) → 長さ20・真上を向く（90度）
+  // 短い半径は 20 × 0.5 = 10
+  const d = load('ellipse-viewport.dxf');
+  const e = only(d, 'ellipse').find((x) => x.cx === 100);
+  assert.ok(e, '楕円が読めていない');
+  near(e.cy, 50, '中心のY');
+  near(e.rx, 20, '長いほうの半径');
+  near(e.ry, 10, '短いほうの半径');
+  assert.equal(Math.round(e.rotation), 90, '傾きが90度になっていない');
+});
+
+test('楕円の「どこからどこまで」が度に直っている（DXFはラジアン）', () => {
+  // 41=0, 42=π/2（ラジアン）→ 0度から90度まで
+  const d = load('ellipse-viewport.dxf');
+  const e = only(d, 'ellipse').find((x) => x.cx === 0);
+  assert.ok(e, '4分の1の楕円が読めていない');
+  assert.equal(Math.round(e.startAngle), 0);
+  assert.equal(Math.round(e.endAngle), 90, 'ラジアンを度に直せていない');
+  near(e.rx, 40, '長いほうの半径');
+  near(e.ry, 10, '短いほうの半径（40×0.25）');
+});
+
+test('楕円が図面の範囲に入る', () => {
+  // ここが入らないと、全体表示で楕円が画面の外に切れる
+  const d = load('ellipse-viewport.dxf');
+  assert.ok(d.bounds.maxX >= 110, `楕円の右端が範囲に入っていない: ${JSON.stringify(d.bounds)}`);
+  assert.ok(d.bounds.maxY >= 70, `楕円の上端が範囲に入っていない: ${JSON.stringify(d.bounds)}`);
+});
+
+test('印刷レイアウトののぞき窓（VIEWPORT）は「表示できませんでした」に数えない', () => {
+  // VIEWPORT は「紙のこの位置に図面のこの範囲を映す」という設定であって、図面の線ではない。
+  // 数えると、図面が欠けていないのに欠けたように見えて無用な心配をかける。
+  const d = load('ellipse-viewport.dxf');
+  assert.equal(d.unsupported.count, 0, `余計なものを数えている: ${JSON.stringify(d.unsupported.kinds)}`);
 });

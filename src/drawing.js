@@ -29,6 +29,10 @@
 //   polyline … 折れ線          { points: [[x,y], ...], closed }
 //   arc      … 円弧            { cx, cy, r, startAngle, endAngle }  角度は度。反時計回り
 //   circle   … 円              { cx, cy, r }
+//   ellipse  … 楕円            { cx, cy, rx, ry, rotation, startAngle, endAngle }
+//              rx … 長いほうの半径   ry … 短いほうの半径
+//              rotation … 長いほうの軸が何度傾いているか（度）
+//              startAngle/endAngle … 楕円のどこからどこまで描くか（度）
 //   text     … 文字            { x, y, height, rotation, text, hAlign, vAlign }
 //              hAlign … 書き出す点の左端/中央/右端のどこに置くか left|center|right
 //              vAlign … 上/中/下のどこに置くか top|middle|bottom|baseline
@@ -38,7 +42,7 @@
 //   layer … レイヤー名（文字列）
 //   color … CSS の色文字列。**白い背景で見える色にすでに変換済み**（下の aciToCss を参照）
 // ------------------------------------------------------------
-export const ENTITY_TYPES = ['line', 'polyline', 'arc', 'circle', 'text'];
+export const ENTITY_TYPES = ['line', 'polyline', 'arc', 'circle', 'ellipse', 'text'];
 
 // ------------------------------------------------------------
 // 色の変換
@@ -284,6 +288,12 @@ export function computeBounds(entities) {
         // 円まるごとで計算すると範囲が広くなりすぎ、図面が小さく表示されてしまう。
         for (const p of arcExtremePoints(e)) put(p[0], p[1]);
         break;
+      case 'ellipse':
+        // 楕円は、輪郭の上の点をいくつか拾って範囲を決める。
+        // きっちり計算する式もあるが、傾いた楕円だと複雑になるうえ、
+        // 用途（全体表示と、画面の外にあるかの判定）には点を拾えば十分。
+        for (const p of ellipsePoints(e)) put(p[0], p[1]);
+        break;
       case 'text':
         // 文字は、書き出しの点と、おおよその文字幅ぶんを範囲に入れる。
         put(e.x, e.y);
@@ -317,6 +327,39 @@ export function arcExtremePoints(arc) {
   for (const d of [0, 90, 180, 270]) {
     const offset = normalizeAngle(d - start);
     if (offset <= sweep) points.push(at(d));
+  }
+  return points;
+}
+
+/**
+ * 楕円の輪郭の上の点を、等間隔に拾う。
+ *
+ * 範囲の計算（全体表示・画面の外かの判定）に使う。
+ * きっちりした式もあるが、傾いた楕円では複雑になり、間違えたときに気づきにくい。
+ * 用途からすると点を拾えば十分な精度が出るので、こちらにしている。
+ *
+ * @param {object} e { cx, cy, rx, ry, rotation, startAngle, endAngle } 角度は度
+ * @param {number} steps いくつに分けるか
+ * @returns {Array<Array<number>>}
+ */
+export function ellipsePoints(e, steps = 48) {
+  const points = [];
+  const start = normalizeAngle(e.startAngle);
+  // 始まりと終わりが同じなら、ぐるっと一周（まるごとの楕円）
+  const sweep = normalizeAngle(e.endAngle - e.startAngle) || 360;
+
+  const rot = ((e.rotation || 0) * Math.PI) / 180;
+  const cos = Math.cos(rot);
+  const sin = Math.sin(rot);
+  const rx = e.rx || 0;
+  const ry = e.ry || 0;
+
+  for (let i = 0; i <= steps; i++) {
+    const t = ((start + (sweep * i) / steps) * Math.PI) / 180;
+    const x = rx * Math.cos(t);
+    const y = ry * Math.sin(t);
+    // 傾きぶん回してから、中心の位置へずらす
+    points.push([e.cx + x * cos - y * sin, e.cy + x * sin + y * cos]);
   }
   return points;
 }

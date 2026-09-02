@@ -133,6 +133,8 @@ function drawEntity(ctx, entity, viewport, lineWidthPx) {
       return drawCircle(ctx, entity, viewport);
     case 'arc':
       return drawArc(ctx, entity, viewport);
+    case 'ellipse':
+      return drawEllipse(ctx, entity, viewport);
     case 'text':
       return drawText(ctx, entity, viewport);
     default:
@@ -196,6 +198,39 @@ function drawArc(ctx, e, vp) {
   ctx.strokeStyle = e.color || '#000000';
   ctx.beginPath();
   ctx.arc(sx, sy, radiusPx, canvasStart, canvasEnd, true);
+  ctx.stroke();
+  return true;
+}
+
+/**
+ * 楕円を描く。
+ *
+ * 角度の向きの扱いは円弧（drawArc）とまったく同じ理由で反転させる。
+ * 図面のY軸は上向き、画面のY軸は下向きなので、そのまま渡すと上下が逆の楕円になる。
+ * 傾き（rotation）も同じく反転が必要。
+ */
+function drawEllipse(ctx, e, vp) {
+  const [sx, sy] = toScreen(vp, e.cx, e.cy);
+  const rxPx = e.rx * vp.scale;
+  const ryPx = e.ry * vp.scale;
+  if (!(rxPx > 0) || !(ryPx > 0)) return false;
+
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const start = e.startAngle || 0;
+
+  // 【落とし穴】始まりと終わりが同じなら「ぐるっと一周」の意味。
+  // 角度は 0〜360度 に直してあるので、一周の楕円は 0度→0度 になる。
+  // そのまま描くと**何も描かれない**（長さ0の弧になる）。
+  // 実物の図面には一周の楕円が100個以上あるので、ここは必ず必要。
+  let sweep = (e.endAngle === undefined ? 360 : e.endAngle) - start;
+  sweep = ((sweep % 360) + 360) % 360;
+  if (sweep === 0) sweep = 360;
+  const end = start + sweep;
+
+  ctx.strokeStyle = e.color || '#000000';
+  ctx.beginPath();
+  // 角度の向きは円弧（drawArc）と同じ理由で反転させる
+  ctx.ellipse(sx, sy, rxPx, ryPx, -toRad(e.rotation || 0), -toRad(start), -toRad(end), true);
   ctx.stroke();
   return true;
 }

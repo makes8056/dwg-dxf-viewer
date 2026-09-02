@@ -621,6 +621,67 @@ function convertLine(rec, drawing, ctx, layerColorMap) {
   emitLine(drawing, ctx, layer, color, x1, y1, x2, y2);
 }
 
+/**
+ * 楕円（ELLIPSE）を読む。
+ *
+ * 配管の図面では、**斜めから見た管の口**や、だ円の記号によく使われます。
+ * 実物の参考図.dxf にも2個あり、v0.1.5まで表示できていませんでした。
+ *
+ * DXFでの書かれ方：
+ *   10,20 … 中心
+ *   11,21 … 長いほうの軸の端（**中心からの相対位置**。ここが分かりにくい）
+ *   40    … 短い半径 ÷ 長い半径 の比
+ *   41,42 … どこからどこまで描くか（ラジアン。0〜2πで一周）
+ */
+function convertEllipse(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = effectiveLayer(g, ctx);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+
+  const cx = flipXIf(flip, num(firstValue(g, 10)));
+  const cy = num(firstValue(g, 20));
+
+  // 長いほうの軸の端。中心からの相対位置なので、そのまま向きと長さになる
+  const majorX = flipXIf(flip, num(firstValue(g, 11)));
+  const majorY = num(firstValue(g, 21));
+
+  const rx = Math.hypot(majorX, majorY);
+  if (!(rx > 0)) {
+    countUnsupported(drawing, 'ELLIPSE（大きさが0）');
+    return;
+  }
+  const ratio = num(firstValue(g, 40), 1);
+  const ry = rx * Math.abs(ratio);
+
+  // 長いほうの軸が何度傾いているか
+  let rotationDeg = (Math.atan2(majorY, majorX) * 180) / Math.PI;
+  if (flip) rotationDeg = 180 - rotationDeg;
+
+  // 41・42 は「ラジアン」。度に直す。省略時は一周。
+  const toDeg = (rad) => (rad * 180) / Math.PI;
+  const startAngle = toDeg(num(firstValue(g, 41), 0));
+  const endAngle = toDeg(num(firstValue(g, 42), Math.PI * 2));
+
+  emitEllipse(drawing, ctx, layer, color, cx, cy, rx, ry, rotationDeg, startAngle, endAngle);
+}
+
+function emitEllipse(drawing, ctx, layer, color, cx, cy, rx, ry, rotationDeg, startAngle, endAngle) {
+  const [CX, CY] = applyMatrix(ctx.transform, cx, cy);
+  drawing.entities.push({
+    type: 'ellipse',
+    layer,
+    color,
+    cx: CX,
+    cy: CY,
+    rx: rx * ctx.scale,
+    ry: ry * ctx.scale,
+    rotation: normalizeAngle(rotationDeg + ctx.rotationDeg),
+    startAngle: normalizeAngle(startAngle),
+    endAngle: normalizeAngle(endAngle),
+  });
+}
+
 function convertCircle(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
   const flip = isExtrusionFlippedX(g);
@@ -1036,6 +1097,8 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
         convertLine(rec, drawing, ctx, layerColorMap);
       } else if (rec.type === 'LWPOLYLINE') {
         convertLwpolyline(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'ELLIPSE') {
+        convertEllipse(rec, drawing, ctx, layerColorMap);
       } else if (rec.type === 'CIRCLE') {
         convertCircle(rec, drawing, ctx, layerColorMap);
       } else if (rec.type === 'ARC') {
@@ -1050,6 +1113,12 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
         expandInsert(rec, drawing, ctx, blocks, layerColorMap);
       } else if (rec.type === 'DIMENSION') {
         expandDimension(rec, drawing, ctx, blocks, layerColorMap);
+      } else if (rec.type === 'VIEWPORT') {
+        // VIEWPORT は「印刷レイアウトののぞき窓」の設定であって、図面の線ではありません。
+        // 「A3の紙のこの位置に、図面のこの範囲を映す」という指定そのものです。
+        // これを「表示できませんでした」と数えると、
+        // **図面が欠けていないのに欠けたように見えて、無用な心配をかけます。**
+        // 実物の図面で4個出て、ユーザーを不安にさせました。そのため数えません。
       } else if (rec.type === 'POINT' && ctx.insideDimension) {
         // 寸法の部品の中に入っている「点」は、CADでも印刷されない目印です
         // （寸法をどこから測ったかを覚えておくためのもの）。
