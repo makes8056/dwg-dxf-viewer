@@ -169,19 +169,37 @@ function hideError() {
 errorClose.addEventListener('click', hideError);
 
 function showUnsupported(drawing) {
+  const messages = [];
+
   const info = drawing && drawing.unsupported;
   const count = info ? info.count : 0;
-  if (!count) {
+  if (count) {
+    const kinds = info.kinds || {};
+    const parts = Object.entries(kinds)
+      .sort((a, b) => b[1] - a[1])
+      .map(([kind, n]) => `${kind} ${n}個`);
+    messages.push(
+      `この図面のうち ${count}個の図形は表示できませんでした` +
+        (parts.length ? `（種類：${parts.join('、')}）` : '')
+    );
+  }
+
+  // 図面本体から遠く離れた図形（消し忘れの線など）があることも隠さず伝える。
+  // 全体表示はこれらを外して図面本体に合わせているため、
+  // 何も言わないと「図面の一部が無い」と誤解される。
+  const outliers = drawing && drawing.outliers;
+  if (outliers) {
+    messages.push(
+      `図面から遠く離れた場所に ${outliers}個の図形があります。` +
+        `全体表示では、図面本体だけに合わせています（指で縮小すると見つかります）`
+    );
+  }
+
+  if (messages.length === 0) {
     unsupportedBanner.hidden = true;
     return;
   }
-  const kinds = info.kinds || {};
-  const parts = Object.entries(kinds)
-    .sort((a, b) => b[1] - a[1])
-    .map(([kind, n]) => `${kind} ${n}個`);
-  unsupportedText.textContent =
-    `この図面のうち ${count}個の図形は表示できませんでした` +
-    (parts.length ? `（種類：${parts.join('、')}）` : '');
+  unsupportedText.textContent = messages.join('　／　');
   unsupportedBanner.hidden = false;
 }
 unsupportedClose.addEventListener('click', () => {
@@ -239,8 +257,12 @@ const fileOpener = setupFileOpen({
     currentDrawing = drawing;
 
     const vp = ensureViewport();
-    if (vp && viewportMod && drawing.bounds) {
-      viewportMod.fitToBounds(vp, drawing.bounds);
+    // 【重要】全体表示には contentBounds（図面本体の範囲）を使う。
+    // bounds（本当の全体）を使うと、図面から遠く離れたはぐれ図形に引っぱられて
+    // 図面本体が数ピクセルの点になり、画面が真っ白にしか見えない。実際にそうなった。
+    const fitTo = drawing.contentBounds || drawing.bounds;
+    if (vp && viewportMod && fitTo) {
+      viewportMod.fitToBounds(vp, fitTo);
     }
 
     showUnsupported(drawing);
@@ -267,8 +289,9 @@ attachToolbar(toolbarEl, {
   },
   onFit: () => {
     const vp = ensureViewport();
-    if (!vp || !currentDrawing || !currentDrawing.bounds) return;
-    viewportMod.fitToBounds(vp, currentDrawing.bounds);
+    const fitTo = currentDrawing && (currentDrawing.contentBounds || currentDrawing.bounds);
+    if (!vp || !fitTo) return;
+    viewportMod.fitToBounds(vp, fitTo);
     scheduleRedraw();
   },
   onZoomIn: () => {

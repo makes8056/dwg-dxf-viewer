@@ -167,13 +167,86 @@ export function countUnsupported(drawing, kind) {
 }
 
 /**
- * 読み込みの最後に呼ぶ。図面全体の範囲（bounds）を計算して入れる。
+ * 読み込みの最後に呼ぶ。図面の範囲を計算して入れる。
  * @param {object} drawing
  * @returns {object} 同じ drawing（呼び出し側が続けて使えるように返す）
  */
 export function finishDrawing(drawing) {
   drawing.bounds = computeBounds(drawing.entities);
+  const content = computeContentBounds(drawing.entities);
+  drawing.contentBounds = content.bounds;
+  drawing.outliers = content.outliers;
   return drawing;
+}
+
+/**
+ * 図形1つが占める範囲を求める。
+ * @param {object} e
+ * @returns {{minX:number,minY:number,maxX:number,maxY:number}|null}
+ */
+export function entityBounds(e) {
+  return computeBounds([e]);
+}
+
+/**
+ * 「図面の本体」がある範囲を求める。
+ *
+ * 【実際の図面で起きた不具合】
+ * お客様の参考図.dxf には、図面本体から**とんでもなく離れた場所に図形**が
+ * いくつかありました（本体は X 684〜2186 なのに、X = -141489 に図形がある）。
+ * CADの図面ではよくあることです（消し忘れた線、別の用紙の名残など）。
+ *
+ * 全部を画面に収めようとすると、そのはぐれ図形に引っぱられて
+ * **図面本体が5ピクセルほどの点になり、真っ白にしか見えません。** 実際にそうなりました。
+ *
+ * そこで「多くの図形が集まっている場所」を図面の本体とみなします。
+ * 判定はとても控えめにしてあります：
+ *   - 98%の図形が収まる距離を測り、**その10倍より遠いものだけ**を、はぐれ図形とする
+ *   - 図面枠のように4隅にしかない図形を、うっかり切り落とさないための余裕です
+ *
+ * @param {Array} entities
+ * @returns {{bounds:object|null, outliers:number}} 本体の範囲と、はぐれ図形の数
+ */
+export function computeContentBounds(entities) {
+  const boxes = [];
+  for (const e of entities) {
+    const b = computeBounds([e]);
+    if (b) boxes.push(b);
+  }
+  if (boxes.length === 0) return { bounds: null, outliers: 0 };
+
+  const centers = boxes.map((b) => [(b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2]);
+  const mid = (arr) => {
+    const s = [...arr].sort((a, b) => a - b);
+    return s[Math.floor(s.length / 2)];
+  };
+  const cx = mid(centers.map((c) => c[0]));
+  const cy = mid(centers.map((c) => c[1]));
+
+  // 図面の真ん中から、縦横どちらかで何マス離れているか
+  const dists = centers.map((c) => Math.max(Math.abs(c[0] - cx), Math.abs(c[1] - cy)));
+  const sorted = [...dists].sort((a, b) => a - b);
+  const d98 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.98))];
+
+  // 「98%が収まる距離」の10倍より遠いものだけを、はぐれ図形とみなす（かなり控えめ）
+  const limit = d98 * 10;
+
+  const kept = [];
+  let outliers = 0;
+  for (let i = 0; i < boxes.length; i++) {
+    if (dists[i] <= limit) kept.push(boxes[i]);
+    else outliers++;
+  }
+  if (kept.length === 0) return { bounds: computeBounds(entities), outliers: 0 };
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const b of kept) {
+    if (b.minX < minX) minX = b.minX;
+    if (b.minY < minY) minY = b.minY;
+    if (b.maxX > maxX) maxX = b.maxX;
+    if (b.maxY > maxY) maxY = b.maxY;
+  }
+  return { bounds: { minX, minY, maxX, maxY }, outliers };
 }
 
 /**

@@ -296,3 +296,54 @@ test('レイヤーに従う色が、日本語のレイヤー名でも正しく�
   assert.equal(line.layer, '既設PIPE');
   assert.equal(line.color, '#ff0000', '日本語レイヤーの色が引けていない');
 });
+
+// ============================================================
+// 寸法（DIMENSION）
+//
+// 管工事の図面で寸法が見えないのは致命的。
+// 参考図.dxf では32個の寸法が全部消えていた（v0.1.1まで）。
+// ============================================================
+
+test('寸法が展開されて、寸法線・補助線・寸法値がすべて出る', () => {
+  const d = load('dimension.dxf');
+
+  // 図面本体の線1本 ＋ 寸法の部品の線3本 ＝ 4本
+  assert.equal(only(d, 'line').length, 4, '寸法の線が出ていない');
+
+  // 寸法値の文字が出ていること
+  const texts = only(d, 'text').map((t) => t.text);
+  assert.deepEqual(texts, ['250'], `寸法値が出ていない: ${JSON.stringify(texts)}`);
+});
+
+test('寸法の部品は、位置をずらさずそのままの場所に出る', () => {
+  // 部品の中身は、すでに図面と同じ座標で書かれている。
+  // ここで差し込み位置を足してしまうと、寸法だけ図面の外へ飛んでいく。
+  const d = load('dimension.dxf');
+  const text = only(d, 'text')[0];
+  assert.equal(text.x, 225, '寸法値のX座標がずれている');
+  assert.equal(text.y, 255, '寸法値のY座標がずれている');
+
+  // 寸法線（100,250)-(350,250)）がそのままの座標で出ていること
+  const dimLine = only(d, 'line').find((l) => l.y1 === 250 && l.y2 === 250);
+  assert.ok(dimLine, '寸法線がその場所に出ていない');
+  assert.deepEqual([dimLine.x1, dimLine.x2], [100, 350]);
+});
+
+test('寸法の中の目印の点は、「表示できませんでした」に数えない', () => {
+  // CADでも印刷されない目印。数えると実物の図面では100個近くになり、
+  // 本当に足りていない図形が埋もれてしまう。
+  const d = load('dimension.dxf');
+  assert.equal(d.unsupported.count, 0, `余計なものを数えている: ${JSON.stringify(d.unsupported.kinds)}`);
+});
+
+test('寸法の線の色が、レイヤーの色になる', () => {
+  const d = load('dimension.dxf');
+  const dimLine = only(d, 'line').find((l) => l.y1 === 250);
+  assert.equal(dimLine.color, '#00ff00', '寸法線の色がレイヤーの色になっていない');
+});
+
+test('図面の範囲に、寸法も含まれる', () => {
+  // 寸法を範囲に入れないと、全体表示したとき寸法が画面の外に切れる
+  const d = load('dimension.dxf');
+  assert.ok(d.bounds.maxY >= 260, `寸法の高さが範囲に入っていない: ${JSON.stringify(d.bounds)}`);
+});

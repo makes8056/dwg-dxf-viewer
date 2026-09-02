@@ -14,6 +14,7 @@ import {
   createDrawing,
   countUnsupported,
   finishDrawing,
+  computeContentBounds,
 } from '../src/drawing.js';
 
 // ------------------------------------------------------------
@@ -172,4 +173,76 @@ test('仕上げをすると範囲が入る', () => {
   d.entities.push({ type: 'line', layer: '0', color: '#000000', x1: 0, y1: 0, x2: 5, y2: 5 });
   finishDrawing(d);
   assert.deepEqual(d.bounds, { minX: 0, minY: 0, maxX: 5, maxY: 5 });
+});
+
+// ============================================================
+// 図面本体の範囲（はぐれ図形を外す）
+//
+// 【実際の図面で起きた不具合】
+// 参考図.dxf には、図面本体から遠く離れた場所に図形が3個あった。
+// 全体を画面に収めようとすると、図面本体が5ピクセルほどの点になり、
+// **画面が真っ白にしか見えなかった。**
+// ============================================================
+
+test('遠く離れたはぐれ図形は、図面本体の範囲から外れる', () => {
+  const entities = [];
+  // 図面本体：0〜100 の範囲に100本の線
+  for (let i = 0; i < 100; i++) {
+    entities.push({ type: 'line', x1: i, y1: 0, x2: i, y2: 100 });
+  }
+  // はぐれ図形：はるか遠くに1本
+  entities.push({ type: 'line', x1: 500000, y1: 500000, x2: 500001, y2: 500001 });
+
+  const full = computeBounds(entities);
+  assert.ok(full.maxX > 400000, '本当の全体の範囲には、はぐれ図形が入る');
+
+  const content = computeContentBounds(entities);
+  assert.equal(content.outliers, 1, 'はぐれ図形を1個と数えていない');
+  assert.ok(content.bounds.maxX <= 200, `図面本体の範囲にはぐれ図形が混ざっている: ${JSON.stringify(content.bounds)}`);
+});
+
+test('図面枠のように四隅にしかない図形は、はぐれ扱いにしない', () => {
+  // ここを厳しくしすぎると、図面枠が切り落とされて図面が一回り小さく見える
+  const entities = [];
+  for (let i = 0; i < 100; i++) {
+    entities.push({ type: 'line', x1: 400 + i, y1: 400, x2: 400 + i, y2: 500 });
+  }
+  // 図面枠（本体の3倍ほど外側。よくある配置）
+  entities.push({ type: 'line', x1: 0, y1: 0, x2: 1000, y2: 0 });
+  entities.push({ type: 'line', x1: 1000, y1: 0, x2: 1000, y2: 1000 });
+  entities.push({ type: 'line', x1: 1000, y1: 1000, x2: 0, y2: 1000 });
+  entities.push({ type: 'line', x1: 0, y1: 1000, x2: 0, y2: 0 });
+
+  const content = computeContentBounds(entities);
+  assert.equal(content.outliers, 0, '図面枠をはぐれ扱いにしている');
+  assert.ok(content.bounds.maxX >= 1000, '図面枠が範囲から切れている');
+});
+
+test('はぐれ図形が無い普通の図面では、範囲が変わらない', () => {
+  const entities = [
+    { type: 'line', x1: 0, y1: 0, x2: 100, y2: 100 },
+    { type: 'circle', cx: 50, cy: 50, r: 10 },
+  ];
+  const full = computeBounds(entities);
+  const content = computeContentBounds(entities);
+  assert.equal(content.outliers, 0);
+  assert.deepEqual(content.bounds, full);
+});
+
+test('図形が無いときは落ちない', () => {
+  const content = computeContentBounds([]);
+  assert.equal(content.bounds, null);
+  assert.equal(content.outliers, 0);
+});
+
+test('仕上げをすると、本体の範囲とはぐれ図形の数も入る', () => {
+  const d = createDrawing('dxf');
+  for (let i = 0; i < 50; i++) {
+    d.entities.push({ type: 'line', layer: '0', color: '#000', x1: i, y1: 0, x2: i, y2: 10 });
+  }
+  d.entities.push({ type: 'line', layer: '0', color: '#000', x1: 999999, y1: 999999, x2: 999999, y2: 999999 });
+  finishDrawing(d);
+  assert.ok(d.bounds.maxX > 900000, '本当の全体の範囲が入っていない');
+  assert.ok(d.contentBounds.maxX < 1000, '図面本体の範囲が入っていない');
+  assert.equal(d.outliers, 1);
 });

@@ -775,6 +775,54 @@ function convertSolid(rec, drawing, ctx, layerColorMap) {
 
 const MAX_BLOCK_DEPTH = 20; // 入れ子ブロックの無限ループ対策
 
+/**
+ * 寸法（DIMENSION）を展開する。
+ *
+ * 【実物の図面で調べて分かったこと】
+ * CADは寸法を「線・矢印・数字」の集まりとして、図面の中に**部品として持っています**。
+ * DIMENSIONという図形は、その部品の名前（例 `*D88`）を指しているだけです。
+ *
+ * 大事なのは、この部品の中身が **すでに図面と同じ座標で書かれている**ことです。
+ * （参考図.dxf で確認：部品の基点は 0,0 で、中身の座標が図面の座標そのものだった）
+ * そのため、位置をずらしたり回したりせず、**そのまま展開すれば正しい場所に出ます。**
+ *
+ * これを飛ばすと、管工事の図面で寸法が1つも見えなくなります。
+ * 参考図.dxf では32個の寸法が全部消えていました。
+ */
+function expandDimension(rec, drawing, ctx, blocks, layerColorMap) {
+  const g = rec.groups;
+  const raw = firstValue(g, 2);
+  const name = raw === undefined ? '' : String(raw).trim();
+  const block = blocks.get(name) ?? (raw !== undefined ? blocks.get(raw) : undefined);
+
+  if (!block) {
+    // 部品が見つからない寸法は描けない。黙って捨てず数える（開発ルール10.5）
+    countUnsupported(drawing, 'DIMENSION（寸法の部品が見つからない）');
+    return;
+  }
+  if (ctx.depth >= MAX_BLOCK_DEPTH) {
+    countUnsupported(drawing, 'DIMENSION（入れ子が深すぎるため打ち切り）');
+    return;
+  }
+
+  const layer = getLayerName(g);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+
+  const childCtx = {
+    // 位置も向きも大きさも変えない。中身がすでに図面の座標で入っているため。
+    transform: ctx.transform,
+    rotationDeg: ctx.rotationDeg,
+    scale: ctx.scale,
+    // 部品の中で「親に従う色」が使われていたら、この寸法の色にする
+    inheritedColor: color,
+    depth: ctx.depth + 1,
+    // ここから下は寸法の内側。中の「目印の点」を数えないための印
+    insideDimension: true,
+  };
+
+  expandRecords(block.records, drawing, childCtx, blocks, layerColorMap);
+}
+
 function expandInsert(rec, drawing, ctx, blocks, layerColorMap) {
   const g = rec.groups;
   const blockName = firstValue(g, 2);
@@ -815,6 +863,8 @@ function expandInsert(rec, drawing, ctx, blocks, layerColorMap) {
     scale: ctx.scale * ((Math.abs(scaleX) + Math.abs(scaleY)) / 2),
     inheritedColor: insertColor,
     depth: ctx.depth + 1,
+    // 寸法の内側かどうかは、その下の部品にも引き継ぐ（矢印は部品として入っている）
+    insideDimension: ctx.insideDimension === true,
   };
 
   // 列（COLUMN）・行（ROW）の繰り返し配置（70,71,44,45）はv1では対応しない。
@@ -864,8 +914,16 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
         convertSolid(rec, drawing, ctx, layerColorMap);
       } else if (rec.type === 'INSERT') {
         expandInsert(rec, drawing, ctx, blocks, layerColorMap);
+      } else if (rec.type === 'DIMENSION') {
+        expandDimension(rec, drawing, ctx, blocks, layerColorMap);
+      } else if (rec.type === 'POINT' && ctx.insideDimension) {
+        // 寸法の部品の中に入っている「点」は、CADでも印刷されない目印です
+        // （寸法をどこから測ったかを覚えておくためのもの）。
+        // これを「表示できませんでした」と数えると、実物の図面では100個近くになり、
+        // **本当に足りていない図形が埋もれてしまいます。** そのため数えません。
+        // 図面の見た目は何も変わりません。
       } else {
-        // POINT / SPLINE / ELLIPSE / HATCH / DIMENSION / ATTRIB など
+        // SPLINE / ELLIPSE / HATCH / VIEWPORT / POINT など
         // → 開発ルール10.5：黙って捨てず、種類ごとに数える
         countUnsupported(drawing, rec.type || '不明');
       }
