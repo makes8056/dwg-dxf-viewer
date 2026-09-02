@@ -1,0 +1,4 @@
+# 改行コードを統一する。Windows・Mac・iPadのどこで開いても同じ中身になるようにする。
+* text=auto eol=lf
+# 図面の見本ファイルは中身を変えない
+*.dxf -text
