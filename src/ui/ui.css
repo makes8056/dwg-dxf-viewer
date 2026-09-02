@@ -1,0 +1,306 @@
+/* ui.css — 見た目（開発ルール9章）
+ *
+ * 前提：管工事の職人さんが、現場でiPadを使う。
+ *   - 手袋をしていることがある → ボタンは指で押しやすい大きさ（1辺44px以上）にする。
+ *   - 屋外の明るい場所で見る → コントラストを強めにする。
+ *   - 横向き・縦向きどちらでも使う → 固定サイズに頼らず、画面いっぱいに敷く。
+ *   - ノッチ（切り欠き）がある機種がある → env(safe-area-inset-*) で避ける。
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+  color: #111111;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif;
+  /* ブラウザの「引っぱって更新」を止める。指の操作をアプリ側で受け止めるため。 */
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* 【重要】隠す指定を、必ず効かせるための1行。
+ *
+ * この下で案内やボタンに `display: flex` を指定している。
+ * `hidden` は本来「表示しない」という印だが、CSSの `display: flex` のほうが強いため、
+ * この1行が無いと **JavaScriptで隠したつもりの案内が画面に出たまま**になる。
+ * 実際にこの不具合が起きた（読み込み中の表示と案内が全部重なって出続けた）ので、
+ * 消さないこと。 */
+[hidden] {
+  display: none !important;
+}
+
+/* ------------------------------------------------------------
+ * キャンバス（図面を描く場所）
+ * ---------------------------------------------------------- */
+#draw-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #ffffff;
+  /* これが無いと、指でなぞる操作をブラウザ（画面のスクロールなど）に取られてしまう。 */
+  touch-action: none;
+}
+
+/* ------------------------------------------------------------
+ * 版番号（右上）
+ * ---------------------------------------------------------- */
+.version-badge {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
+  z-index: 20;
+  padding: 4px 10px;
+  font-size: 13px;
+  color: #555555;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 8px;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ------------------------------------------------------------
+ * ツールバー（下中央に固定。指で押しやすい大きさを確保）
+ * ---------------------------------------------------------- */
+.toolbar {
+  position: fixed;
+  left: 50%;
+  bottom: max(14px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #d8d8d8;
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  /* 横に並べたボタンが画面幅より大きい場合でも、崩れずに横スクロールできるようにする */
+  max-width: calc(100vw - 20px);
+  overflow-x: auto;
+}
+
+.tb-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  /* 指で押しやすい大きさ：1辺44px以上を必ず確保する */
+  min-width: 64px;
+  min-height: 56px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 12px;
+  background: #f4f4f4;
+  color: #111111;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.2;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.tb-btn:active {
+  background: #dcebff;
+}
+
+.tb-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: #1a1a1a;
+}
+
+.tb-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.tb-label {
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------
+ * 読み込み中のオーバーレイ
+ * ---------------------------------------------------------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.overlay-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 24px 32px;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
+  font-size: 18px;
+  font-weight: 600;
+  color: #111111;
+}
+
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 4px solid #d8d8d8;
+  border-top-color: #1a73e8;
+  border-radius: 50%;
+  animation: dxf-spin 0.9s linear infinite;
+}
+
+@keyframes dxf-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ------------------------------------------------------------
+ * お知らせバナー（エラー・警告・準備中）
+ * 画面上部、ノッチを避けて出す。
+ * ---------------------------------------------------------- */
+.banner {
+  position: fixed;
+  left: max(10px, env(safe-area-inset-left));
+  right: max(10px, env(safe-area-inset-right));
+  top: max(10px, env(safe-area-inset-top));
+  z-index: 30;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 15px;
+  line-height: 1.5;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+.banner-text {
+  flex: 1;
+  white-space: pre-line;
+}
+
+.banner-close {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.08);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  color: inherit;
+}
+
+.banner-error {
+  background: #fdecea;
+  color: #7a1712;
+  border: 1px solid #f3b3ac;
+}
+
+.banner-warning {
+  background: #fff6e0;
+  color: #6b4a00;
+  border: 1px solid #f0d382;
+}
+
+.banner-info {
+  background: #eaf2ff;
+  color: #123a7a;
+  border: 1px solid #b9d2f7;
+}
+
+/* エラー・警告バナーが同時に出たときに重ならないよう、下へずらす */
+#error-banner {
+  top: max(10px, env(safe-area-inset-top));
+}
+
+#unsupported-banner {
+  top: calc(max(10px, env(safe-area-inset-top)) + 72px);
+}
+
+/* ------------------------------------------------------------
+ * Safari以外のブラウザでの案内（小さめ・押しつけがましくしない）
+ * ---------------------------------------------------------- */
+.hint {
+  position: fixed;
+  left: max(10px, env(safe-area-inset-left));
+  right: max(10px, env(safe-area-inset-right));
+  /* ボタンの上に、必ず12pxすき間をあけて置く。
+   *
+   * 【04と同じ事故を防ぐための書き方】
+   * ここを「84px」のような決め打ちにすると、画面の大きさや文字の大きさが変わったときに
+   * **案内がボタンの上に重なる**（実際に重なった）。
+   * そこで `--toolbar-height` に、src/ui/app.js が測った本当の高さを入れている。
+   * 決め打ちの数字に戻さないこと。 */
+  bottom: calc(max(14px, env(safe-area-inset-bottom)) + var(--toolbar-height, 84px) + 12px);
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 auto;
+  max-width: 480px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(30, 30, 30, 0.88);
+  color: #ffffff;
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+
+.hint-text {
+  flex: 1;
+}
+
+.hint-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------
+ * 横向きのときは、ツールバーを少し小さくして重なりを避ける
+ * ---------------------------------------------------------- */
+@media (orientation: landscape) and (max-height: 480px) {
+  .tb-btn {
+    min-width: 52px;
+    min-height: 44px;
+    font-size: 11px;
+  }
+  /* .hint の位置はここで上書きしない。
+   * 上書きするとボタンの実際の高さと合わなくなり、案内がボタンに重なる。 */
+}

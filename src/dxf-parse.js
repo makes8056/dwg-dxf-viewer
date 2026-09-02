@@ -1,0 +1,854 @@
+// dxf-parse.js — DXF（文字形式）を読んで、drawing.js の形の図形データにする係
+//
+// この係が知っているのはDXFの決まりごとだけ。
+// 描く・印刷する・寸法を測る側は、この係の中身を一切知らない（開発ルール10.1）。
+//
+// 大まかな流れ：
+//   1. 行の並び（グループコード・値のペア）に分ける
+//   2. TABLES（レイヤー一覧）・BLOCKS（部品の定義）・ENTITIES（実際の図形）を拾う
+//   3. INSERT（部品の配置）は、その場で line / arc などに展開する（開発ルール10.4）
+//   4. 色は drawing.js の aciToCss() / rgbToCss() だけを使う（色の表はここでは作らない）
+//
+// 対応できない図形（SPLINE・HATCHなど）は countUnsupported() で数える（10.5：黙って捨てない）。
+
+import {
+  createDrawing,
+  finishDrawing,
+  countUnsupported,
+  aciToCss,
+  rgbToCss,
+  normalizeAngle,
+} from './drawing.js';
+
+// ============================================================
+// 文字コードの変換（バイト列 → 文字列）
+// ============================================================
+
+/**
+ * DXFファイルのバイト列を、正しい文字コードで文字列にする。
+ *
+ * やり方：
+ *   1. まずUTF-8として読んでみる
+ *   2. ヘッダーの $DWGCODEPAGE を探す。ANSI_932（日本語のShift-JIS）なら、
+ *      同じバイト列をもう一度 Shift-JIS として読み直す
+ *   3. 判定できないときはUTF-8のまま使う
+ *
+ * @param {ArrayBuffer} buffer
+ * @returns {string}
+ */
+export function decodeDxfBuffer(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let utf8Text;
+  try {
+    utf8Text = new TextDecoder('utf-8').decode(bytes);
+  } catch {
+    utf8Text = '';
+  }
+
+  const codepage = findCodepage(utf8Text);
+  if (codepage && isShiftJisCodepage(codepage)) {
+    try {
+      return new TextDecoder('shift_jis').decode(bytes);
+    } catch {
+      // Shift-JISで読めない環境なら、UTF-8のまま諦める
+      return utf8Text;
+    }
+  }
+  return utf8Text;
+}
+
+// $DWGCODEPAGE の値（例 "ANSI_932"）をヘッダーの中から探す。
+// まだ正式にトークン分けする前の、ざっくりした文字列検索でよい
+// （$DWGCODEPAGE の値には日本語が混ざりようがないため、UTF-8のまま読んでも壊れない）。
+function findCodepage(text) {
+  const m = text.match(/\$DWGCODEPAGE\s*[\r\n]+\s*3\s*[\r\n]+\s*([A-Za-z0-9_]+)/);
+  return m ? m[1] : null;
+}
+
+function isShiftJisCodepage(codepage) {
+  // ANSI_932 が日本語Windows（Shift-JIS）の合図
+  return /^ANSI_932$/i.test(codepage);
+}
+
+// ============================================================
+// 行の並び（グループコード・値のペア）に分ける
+// ============================================================
+
+// バイナリDXF（今回は非対応）の目印
+const BINARY_DXF_MARKER = 'AutoCAD Binary DXF';
+
+function isBinaryDxf(text) {
+  // バイナリDXFはファイルの先頭がこの文字列（+ 改行 + 制御バイト）で始まる
+  return text.slice(0, BINARY_DXF_MARKER.length) === BINARY_DXF_MARKER;
+}
+
+/**
+ * 文字形式のDXFを「グループコード・値」のペアの並びにする。
+ * 壊れている／途中で切れている場合は、読めたところまでを返す。
+ * @param {string} text
+ * @returns {Array<[number, string]>}
+ */
+function tokenize(text) {
+  // \r\n と \r 単独（古いMac形式）の両方を \n に揃える（落とし穴3）
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const rawLines = normalized.split('\n');
+
+  const pairs = [];
+  // 末尾に空行が残っていても無視できるよう、2行ずつ組みにできる分だけ読む
+  const pairCount = Math.floor(rawLines.length / 2);
+  for (let i = 0; i < pairCount; i++) {
+    const codeLine = rawLines[i * 2].trim();
+    const code = parseInt(codeLine, 10);
+    if (!Number.isFinite(code)) {
+      // グループコードとして読めない行が出てきたら、ここでファイルが壊れている。
+      // それまで読めた分だけを返す（落とし穴7：落ちずにそこまで返す）。
+      break;
+    }
+    const value = rawLines[i * 2 + 1];
+    pairs.push([code, value]);
+  }
+  return pairs;
+}
+
+// ============================================================
+// 数値の取り出し
+// ============================================================
+
+function num(value, fallback = 0) {
+  const n = parseFloat(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+// ============================================================
+// 1つの「レコード」（0で始まり、次の0の手前まで）を読む
+// ============================================================
+
+/**
+ * pairs[idx] が (0, 種類名) を指している前提で、そのレコードの中身をまとめて読む。
+ * @returns {{ type:string, groups:Array<[number,string]>, nextIndex:number }}
+ */
+function readRecord(pairs, idx) {
+  const type = String(pairs[idx][1]).trim();
+  const groups = [];
+  let i = idx + 1;
+  while (i < pairs.length && pairs[i][0] !== 0) {
+    groups.push(pairs[i]);
+    i++;
+  }
+  return { type, groups, nextIndex: i };
+}
+
+// groups の中から、指定コードの最初の値を返す（無ければ undefined）
+function firstValue(groups, code) {
+  for (const [c, v] of groups) {
+    if (c === code) return v;
+  }
+  return undefined;
+}
+
+// ============================================================
+// セクション（SECTION〜ENDSEC）を仕分ける
+// ============================================================
+
+/**
+ * DXF全体を読んで、レイヤー一覧・ブロック定義・ENTITIESセクションの生レコードを集める。
+ * @param {Array<[number,string]>} pairs
+ */
+function collectSections(pairs) {
+  const layers = new Map(); // name -> { name, color }
+  const blocks = new Map(); // name -> { name, base:{x,y}, records: [...] }
+  const topEntityRecords = [];
+
+  let i = 0;
+  while (i < pairs.length) {
+    const [code, value] = pairs[i];
+    if (code === 0 && String(value).trim() === 'SECTION') {
+      i++;
+      let sectionName = '';
+      if (i < pairs.length && pairs[i][0] === 2) {
+        sectionName = String(pairs[i][1]).trim();
+        i++;
+      }
+      if (sectionName === 'TABLES') {
+        i = parseTablesSection(pairs, i, layers);
+      } else if (sectionName === 'BLOCKS') {
+        i = parseBlocksSection(pairs, i, blocks);
+      } else if (sectionName === 'ENTITIES') {
+        i = parseEntitiesSection(pairs, i, topEntityRecords);
+      } else {
+        i = skipToEndSec(pairs, i);
+      }
+    } else if (code === 0 && String(value).trim() === 'EOF') {
+      break;
+    } else {
+      i++;
+    }
+  }
+
+  return { layers, blocks, topEntityRecords };
+}
+
+function skipToEndSec(pairs, i) {
+  while (i < pairs.length) {
+    const [code, value] = pairs[i];
+    if (code === 0 && String(value).trim() === 'ENDSEC') return i + 1;
+    i++;
+  }
+  return i; // 途中で切れていた
+}
+
+function parseTablesSection(pairs, i, layers) {
+  while (i < pairs.length) {
+    const [code, value] = pairs[i];
+    if (code === 0 && String(value).trim() === 'ENDSEC') return i + 1;
+
+    if (code === 0 && String(value).trim() === 'TABLE') {
+      i++;
+      let tableName = '';
+      if (i < pairs.length && pairs[i][0] === 2) {
+        tableName = String(pairs[i][1]).trim();
+        i++;
+      }
+      if (tableName === 'LAYER') {
+        i = parseLayerTable(pairs, i, layers);
+      } else {
+        i = skipToEndTab(pairs, i);
+      }
+      continue;
+    }
+    i++;
+  }
+  return i;
+}
+
+function skipToEndTab(pairs, i) {
+  while (i < pairs.length) {
+    const [code, value] = pairs[i];
+    if (code === 0 && String(value).trim() === 'ENDTAB') return i + 1;
+    i++;
+  }
+  return i;
+}
+
+function parseLayerTable(pairs, i, layers) {
+  while (i < pairs.length) {
+    const [code, value] = pairs[i];
+    if (code === 0 && String(value).trim() === 'ENDTAB') return i + 1;
+    if (code === 0 && String(value).trim() === 'LAYER') {
+      const rec = readRecord(pairs, i);
+      const name = firstValue(rec.groups, 2);
+      if (name !== undefined) {
+        const colorRaw = firstValue(rec.groups, 62);
+        const trueColor = firstValue(rec.groups, 420);
+        let color;
+        if (trueColor !== undefined) {
+          color = rgbToCss(num(trueColor));
+        } else {
+          // マイナスの色番号＝レイヤーを非表示にする合図。色そのものは絶対値を使う
+          const colorNumber = colorRaw === undefined ? 7 : Math.abs(num(colorRaw, 7));
+          color = aciToCss(colorNumber);
+        }
+        layers.set(name, { name, color });
+      }
+      i = rec.nextIndex;
+      continue;
+    }
+    i++;
+  }
+  return i;
+}
+
+function parseBlocksSection(pairs, i, blocks) {
+  while (i < pairs.length) {
+    const [code, value] = pairs[i];
+    if (code === 0 && String(value).trim() === 'ENDSEC') return i + 1;
+
+    if (code === 0 && String(value).trim() === 'BLOCK') {
+      const header = readRecord(pairs, i);
+      const name = firstValue(header.groups, 2) || '';
+      const baseX = num(firstValue(header.groups, 10), 0);
+      const baseY = num(firstValue(header.groups, 20), 0);
+      i = header.nextIndex;
+
+      const records = [];
+      while (i < pairs.length) {
+        const [c2, v2] = pairs[i];
+        if (c2 === 0 && String(v2).trim() === 'ENDBLK') {
+          const endRec = readRecord(pairs, i);
+          i = endRec.nextIndex;
+          break;
+        }
+        if (c2 === 0) {
+          const rec = readRecord(pairs, i);
+          records.push(rec);
+          i = rec.nextIndex;
+        } else {
+          i++;
+        }
+      }
+      blocks.set(name, { name, base: { x: baseX, y: baseY }, records });
+      continue;
+    }
+    i++;
+  }
+  return i;
+}
+
+function parseEntitiesSection(pairs, i, out) {
+  while (i < pairs.length) {
+    const [code, value] = pairs[i];
+    if (code === 0 && String(value).trim() === 'ENDSEC') return i + 1;
+    if (code === 0) {
+      const rec = readRecord(pairs, i);
+      out.push(rec);
+      i = rec.nextIndex;
+    } else {
+      i++;
+    }
+  }
+  return i;
+}
+
+// ============================================================
+// 2D アフィン変換（ブロックの展開に使う。位置・拡大率・回転をまとめて持ち運ぶ）
+//   変換後の点 = (a*x + c*y + e, b*x + d*y + f)
+// ============================================================
+
+const IDENTITY_MATRIX = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+
+function applyMatrix(m, x, y) {
+  return [m.a * x + m.c * y + m.e, m.b * x + m.d * y + m.f];
+}
+
+// combined(p) = outer(inner(p)) となる行列を作る
+function composeMatrix(outer, inner) {
+  return {
+    a: outer.a * inner.a + outer.c * inner.b,
+    b: outer.b * inner.a + outer.d * inner.b,
+    c: outer.a * inner.c + outer.c * inner.d,
+    d: outer.b * inner.c + outer.d * inner.d,
+    e: outer.a * inner.e + outer.c * inner.f + outer.e,
+    f: outer.b * inner.e + outer.d * inner.f + outer.f,
+  };
+}
+
+// INSERTの「配置」を表す行列を作る（部品の中の座標 → 置き先の座標）
+function makeInsertMatrix({ baseX, baseY, scaleX, scaleY, rotationDeg, insertX, insertY }) {
+  const toOrigin = { a: 1, b: 0, c: 0, d: 1, e: -baseX, f: -baseY };
+  const scale = { a: scaleX, b: 0, c: 0, d: scaleY, e: 0, f: 0 };
+  const rad = (rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const rotate = { a: cos, b: sin, c: -sin, d: cos, e: 0, f: 0 };
+  const toInsert = { a: 1, b: 0, c: 0, d: 1, e: insertX, f: insertY };
+
+  let m = composeMatrix(scale, toOrigin);
+  m = composeMatrix(rotate, m);
+  m = composeMatrix(toInsert, m);
+  return m;
+}
+
+// ============================================================
+// 押し出し方向（グループコード210系）。Zが-1なら左右反転（落とし穴4）
+// ============================================================
+
+function isExtrusionFlippedX(groups) {
+  const z = firstValue(groups, 230);
+  if (z === undefined) return false;
+  return num(z, 1) <= -0.5;
+}
+
+function flipXIf(flip, x) {
+  return flip ? -x : x;
+}
+
+// X反転（鏡映）のもとでは、CCWの向きそのものが逆転するため、
+// 角度は (180 - 角度) に置き換えたうえで start と end を入れ替える。
+function mirrorArcAngles(flip, startAngle, endAngle) {
+  if (!flip) return [startAngle, endAngle];
+  return [180 - endAngle, 180 - startAngle];
+}
+
+function mirrorRotation(flip, rotationDeg) {
+  return flip ? 180 - rotationDeg : rotationDeg;
+}
+
+// ============================================================
+// 色の決めごと（開発ルール・落とし穴5）
+//   62 が無い/256 → BYLAYER（レイヤーの色）
+//   62 が 0        → BYBLOCK（ブロックを展開しているときはINSERT側の色を継承）
+//   420 があれば    → 24ビットの色（rgbToCssを使う）
+// ============================================================
+
+function resolveColor(groups, layerName, layerColorMap, inheritedColor) {
+  const trueColor = firstValue(groups, 420);
+  if (trueColor !== undefined) {
+    return rgbToCss(num(trueColor));
+  }
+  const colorRaw = firstValue(groups, 62);
+  const colorNumber = colorRaw === undefined ? 256 : num(colorRaw, 256);
+
+  if (colorNumber === 0) {
+    // BYBLOCK
+    return inheritedColor;
+  }
+  if (colorNumber === 256) {
+    // BYLAYER
+    const layer = layerColorMap.get(layerName);
+    return layer ? layer.color : aciToCss(7);
+  }
+  return aciToCss(colorNumber);
+}
+
+function getLayerName(groups) {
+  const v = firstValue(groups, 8);
+  return v === undefined ? '0' : String(v).trim();
+}
+
+// ============================================================
+// bulge（ふくらみ）付きの区間を円弧にする
+//
+// bulge = tan(区間の中心角 ÷ 4)。正なら反時計回り、負なら時計回り（DXFの決まり）。
+// 導出の確認は tests/dxf-parse.test.js で、
+// 「変換した円弧の始点・終点が、元の2点に戻ること」を実際に計算して確かめている。
+// ============================================================
+
+function bulgeToArc(x1, y1, x2, y2, bulge) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const d = Math.hypot(dx, dy);
+  if (d === 0) return null;
+
+  const theta = 4 * Math.atan(bulge); // ラジアン。符号つき
+  const halfTheta = theta / 2;
+  const sinHalf = Math.sin(halfTheta);
+  if (Math.abs(sinHalf) < 1e-12) return null; // ほぼ直線（bulgeがほぼ0）
+
+  const r = d / (2 * sinHalf); // 符号つき半径
+  const ux = dx / d;
+  const uy = dy / d;
+  // 進行方向を反時計回りに90度回した向き
+  const nx = -uy;
+  const ny = ux;
+
+  const mx = (x1 + x2) / 2;
+  const my = (y1 + y2) / 2;
+  const h = r * Math.cos(halfTheta);
+  const cx = mx + h * nx;
+  const cy = my + h * ny;
+
+  const thetaDeg = (theta * 180) / Math.PI;
+  const a1 = (Math.atan2(y1 - cy, x1 - cx) * 180) / Math.PI;
+
+  // a2 = a1 + thetaDeg が必ず成り立つ（bulgeの定義そのもの）。
+  // drawing.jsの円弧は「startAngleからendAngleへ反時計回り」で決まっているので、
+  // thetaDegが負（時計回り）のときは start/end を入れ替えて、反時計回りの掃引量が
+  // |thetaDeg| になるようにする。
+  const startAngle = a1 + Math.min(thetaDeg, 0);
+  const endAngle = a1 + Math.max(thetaDeg, 0);
+
+  return { cx, cy, r: Math.abs(r), startAngle, endAngle };
+}
+
+// ============================================================
+// LWPOLYLINE / 旧形式POLYLINE の頂点列 → line/arc の並びに展開する
+//
+// bulge（ふくらみ）が付いた区間は円弧になる。直線でつなぐと図面が変わってしまうため
+// （司令塔からの指示）、区間ごとに line か arc の実体として出す。
+// ============================================================
+
+/**
+ * @param {Array<{x:number,y:number,bulge:number}>} vertices 反転・変換前のローカル座標
+ * @param {boolean} closed
+ * @param {function} emitSegment (x1,y1,x2,y2,bulge) => void
+ */
+function walkPolylineSegments(vertices, closed, emitSegment) {
+  const n = vertices.length;
+  if (n < 2) return;
+  const last = closed ? n : n - 1;
+  for (let i = 0; i < last; i++) {
+    const p1 = vertices[i];
+    const p2 = vertices[(i + 1) % n];
+    emitSegment(p1.x, p1.y, p2.x, p2.y, p1.bulge || 0);
+  }
+}
+
+// ============================================================
+// 図形（レコード）を drawing.entities に積む
+// ============================================================
+
+function emitLine(drawing, ctx, layer, color, x1, y1, x2, y2) {
+  const [X1, Y1] = applyMatrix(ctx.transform, x1, y1);
+  const [X2, Y2] = applyMatrix(ctx.transform, x2, y2);
+  drawing.entities.push({ type: 'line', layer, color, x1: X1, y1: Y1, x2: X2, y2: Y2 });
+}
+
+function emitArc(drawing, ctx, layer, color, cx, cy, r, startAngle, endAngle) {
+  const [CX, CY] = applyMatrix(ctx.transform, cx, cy);
+  drawing.entities.push({
+    type: 'arc',
+    layer,
+    color,
+    cx: CX,
+    cy: CY,
+    r: r * ctx.scale,
+    startAngle: normalizeAngle(startAngle + ctx.rotationDeg),
+    endAngle: normalizeAngle(endAngle + ctx.rotationDeg),
+  });
+}
+
+function emitCircle(drawing, ctx, layer, color, cx, cy, r) {
+  const [CX, CY] = applyMatrix(ctx.transform, cx, cy);
+  drawing.entities.push({ type: 'circle', layer, color, cx: CX, cy: CY, r: r * ctx.scale });
+}
+
+function emitPolyline(drawing, ctx, layer, color, points, closed) {
+  const pts = points.map(([x, y]) => applyMatrix(ctx.transform, x, y));
+  drawing.entities.push({ type: 'polyline', layer, color, points: pts, closed });
+}
+
+function emitText(drawing, ctx, layer, color, x, y, height, rotation, text) {
+  const [X, Y] = applyMatrix(ctx.transform, x, y);
+  drawing.entities.push({
+    type: 'text',
+    layer,
+    color,
+    x: X,
+    y: Y,
+    height: height * ctx.scale,
+    rotation: rotation + ctx.rotationDeg,
+    text,
+  });
+}
+
+// 折れ線（bulgeを含む）を line / arc として積む。分割しても図面上は1本の折れ線に見える。
+function emitPolylineWithBulge(drawing, ctx, layer, color, vertices, closed) {
+  walkPolylineSegments(vertices, closed, (x1, y1, x2, y2, bulge) => {
+    if (bulge) {
+      const arc = bulgeToArc(x1, y1, x2, y2, bulge);
+      if (arc) {
+        emitArc(drawing, ctx, layer, color, arc.cx, arc.cy, arc.r, arc.startAngle, arc.endAngle);
+        return;
+      }
+    }
+    emitLine(drawing, ctx, layer, color, x1, y1, x2, y2);
+  });
+}
+
+// ============================================================
+// エンティティ種類ごとの変換
+// ============================================================
+
+function convertLine(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = getLayerName(g);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const x1 = flipXIf(flip, num(firstValue(g, 10)));
+  const y1 = num(firstValue(g, 20));
+  const x2 = flipXIf(flip, num(firstValue(g, 11)));
+  const y2 = num(firstValue(g, 21));
+  emitLine(drawing, ctx, layer, color, x1, y1, x2, y2);
+}
+
+function convertCircle(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = getLayerName(g);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const cx = flipXIf(flip, num(firstValue(g, 10)));
+  const cy = num(firstValue(g, 20));
+  const r = num(firstValue(g, 40));
+  emitCircle(drawing, ctx, layer, color, cx, cy, r);
+}
+
+function convertArc(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = getLayerName(g);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const cx = flipXIf(flip, num(firstValue(g, 10)));
+  const cy = num(firstValue(g, 20));
+  const r = num(firstValue(g, 40));
+  let startAngle = num(firstValue(g, 50));
+  let endAngle = num(firstValue(g, 51));
+  [startAngle, endAngle] = mirrorArcAngles(flip, startAngle, endAngle);
+  emitArc(drawing, ctx, layer, color, cx, cy, r, startAngle, endAngle);
+}
+
+function convertText(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = getLayerName(g);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const x = flipXIf(flip, num(firstValue(g, 10)));
+  const y = num(firstValue(g, 20));
+  const height = num(firstValue(g, 40), 2.5);
+  const rotation = mirrorRotation(flip, num(firstValue(g, 50)));
+  const text = String(firstValue(g, 1) ?? '');
+  emitText(drawing, ctx, layer, color, x, y, height, rotation, text);
+}
+
+function convertMText(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = getLayerName(g);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const x = flipXIf(flip, num(firstValue(g, 10)));
+  const y = num(firstValue(g, 20));
+  const height = num(firstValue(g, 40), 2.5);
+  const rotation = mirrorRotation(flip, num(firstValue(g, 50)));
+
+  // 長い文字列は 3 が前半、1 が最後の続きになっている（250文字ずつの分割）
+  let raw = '';
+  for (const [c, v] of g) {
+    if (c === 3) raw += v;
+  }
+  raw += String(firstValue(g, 1) ?? '');
+
+  emitText(drawing, ctx, layer, color, x, y, height, rotation, cleanMText(raw));
+}
+
+// MTEXTの書式指定を取り除いて、素の文字だけにする
+function cleanMText(raw) {
+  let s = String(raw ?? '');
+  s = s.replace(/\\P/g, '\n'); // 改行
+  s = s.replace(/\\~/g, ' '); // 改行しない空白
+  // \f フォント指定、\H \W \C \Q \A \T \S など「英字+値+;」の書式コードを除去
+  s = s.replace(/\\[fF][^;]*;/g, '');
+  s = s.replace(/\\[A-Za-z][^\\{};]*;/g, '');
+  // 単独トグル（\L \l \O \o \K \k）を除去
+  s = s.replace(/\\[A-Za-z](?=[^a-zA-Z]|$)/g, '');
+  // 中かっこは取り除き、中身だけ残す
+  s = s.replace(/[{}]/g, '');
+  // エスケープされていた文字を戻す
+  s = s.replace(/\\\\/g, '\\');
+  return s;
+}
+
+function convertLwpolyline(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = getLayerName(g);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const flags = num(firstValue(g, 70), 0);
+  const closed = (flags & 1) === 1;
+
+  // 10,20,42 が頂点ごとに繰り返される。出てくる順番どおりに読む必要がある
+  const vertices = [];
+  let current = null;
+  for (const [code, value] of g) {
+    if (code === 10) {
+      current = { x: flipXIf(flip, num(value)), y: 0, bulge: 0 };
+      vertices.push(current);
+    } else if (code === 20 && current) {
+      current.y = num(value);
+    } else if (code === 42 && current) {
+      current.bulge = flip ? -num(value) : num(value); // X反転で向きが逆になる
+    }
+  }
+
+  const hasBulge = vertices.some((v) => v.bulge);
+  if (hasBulge) {
+    emitPolylineWithBulge(drawing, ctx, layer, color, vertices, closed);
+  } else {
+    emitPolyline(drawing, ctx, layer, color, vertices.map((v) => [v.x, v.y]), closed);
+  }
+}
+
+// 旧形式 POLYLINE（+ VERTEX + SEQEND）
+function convertOldPolyline(headerRec, vertexRecs, drawing, ctx, layerColorMap) {
+  const g = headerRec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = getLayerName(g);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const flags = num(firstValue(g, 70), 0);
+  const closed = (flags & 1) === 1;
+
+  const vertices = vertexRecs.map((v) => {
+    const vg = v.groups;
+    return {
+      x: flipXIf(flip, num(firstValue(vg, 10))),
+      y: num(firstValue(vg, 20)),
+      bulge: flip ? -num(firstValue(vg, 42), 0) : num(firstValue(vg, 42), 0),
+    };
+  });
+
+  const hasBulge = vertices.some((v) => v.bulge);
+  if (hasBulge) {
+    emitPolylineWithBulge(drawing, ctx, layer, color, vertices, closed);
+  } else {
+    emitPolyline(drawing, ctx, layer, color, vertices.map((v) => [v.x, v.y]), closed);
+  }
+}
+
+// SOLID：4点。3点目と4点目が同じなら三角形（開発ルールの指示どおり）
+function convertSolid(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = getLayerName(g);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const p1 = [flipXIf(flip, num(firstValue(g, 10))), num(firstValue(g, 20))];
+  const p2 = [flipXIf(flip, num(firstValue(g, 11))), num(firstValue(g, 21))];
+  const p3 = [flipXIf(flip, num(firstValue(g, 12))), num(firstValue(g, 22))];
+  const p4raw10 = firstValue(g, 13);
+  const p4 = p4raw10 === undefined
+    ? p3
+    : [flipXIf(flip, num(firstValue(g, 13))), num(firstValue(g, 23))];
+
+  let points = [p1, p2, p4, p3]; // SOLIDの頂点順は 1-2-4-3 で四角形になる決まり
+  if (p3[0] === p4[0] && p3[1] === p4[1]) {
+    points = [p1, p2, p3]; // 3点目と4点目が同じ＝三角形
+  }
+  emitPolyline(drawing, ctx, layer, color, points, true);
+}
+
+// ============================================================
+// INSERT（ブロックの配置）を展開する
+// ============================================================
+
+const MAX_BLOCK_DEPTH = 20; // 入れ子ブロックの無限ループ対策
+
+function expandInsert(rec, drawing, ctx, blocks, layerColorMap) {
+  const g = rec.groups;
+  const blockName = firstValue(g, 2);
+  const block = blockName ? blocks.get(blockName) : undefined;
+  if (!block) {
+    countUnsupported(drawing, 'INSERT（未定義のブロック）');
+    return;
+  }
+  if (ctx.depth >= MAX_BLOCK_DEPTH) {
+    countUnsupported(drawing, 'INSERT（入れ子が深すぎるため打ち切り）');
+    return;
+  }
+
+  const flip = isExtrusionFlippedX(g);
+  const layer = getLayerName(g);
+  const insertColor = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+
+  const insertX = flipXIf(flip, num(firstValue(g, 10)));
+  const insertY = num(firstValue(g, 20));
+  const scaleX = num(firstValue(g, 41), 1);
+  const scaleY = num(firstValue(g, 42), 1);
+  let rotationDeg = num(firstValue(g, 50), 0);
+  if (flip) rotationDeg = 180 - rotationDeg;
+
+  const localMatrix = makeInsertMatrix({
+    baseX: block.base.x,
+    baseY: block.base.y,
+    scaleX,
+    scaleY,
+    rotationDeg,
+    insertX,
+    insertY,
+  });
+
+  const childCtx = {
+    transform: composeMatrix(ctx.transform, localMatrix),
+    rotationDeg: ctx.rotationDeg + rotationDeg,
+    scale: ctx.scale * ((Math.abs(scaleX) + Math.abs(scaleY)) / 2),
+    inheritedColor: insertColor,
+    depth: ctx.depth + 1,
+  };
+
+  // 列（COLUMN）・行（ROW）の繰り返し配置（70,71,44,45）はv1では対応しない。
+  // 対応していないと分かるよう、繰り返しがある場合は1個ぶんだけ展開して報告に混ぜない
+  // （見た目としては1個でも図形が出るほうが、何も出ないより安全なため）。
+
+  expandRecords(block.records, drawing, childCtx, blocks, layerColorMap);
+}
+
+// ============================================================
+// レコードの並びを順番に見て、drawing.entities に積んでいく
+// （ENTITIESセクションの並びにも、BLOCK定義の中身にも使う）
+// ============================================================
+
+function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
+  for (let i = 0; i < records.length; i++) {
+    const rec = records[i];
+    try {
+      if (rec.type === 'POLYLINE') {
+        const vertexRecs = [];
+        let j = i + 1;
+        while (j < records.length && records[j].type === 'VERTEX') {
+          vertexRecs.push(records[j]);
+          j++;
+        }
+        if (j < records.length && records[j].type === 'SEQEND') j++;
+        convertOldPolyline(rec, vertexRecs, drawing, ctx, layerColorMap);
+        i = j - 1;
+        continue;
+      }
+      if (rec.type === 'VERTEX' || rec.type === 'SEQEND') {
+        continue; // POLYLINEの外に出てきた場合は無視（壊れたファイル対策）
+      }
+      if (rec.type === 'LINE') {
+        convertLine(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'LWPOLYLINE') {
+        convertLwpolyline(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'CIRCLE') {
+        convertCircle(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'ARC') {
+        convertArc(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'TEXT') {
+        convertText(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'MTEXT') {
+        convertMText(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'SOLID') {
+        convertSolid(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'INSERT') {
+        expandInsert(rec, drawing, ctx, blocks, layerColorMap);
+      } else {
+        // POINT / SPLINE / ELLIPSE / HATCH / DIMENSION / ATTRIB など
+        // → 開発ルール10.5：黙って捨てず、種類ごとに数える
+        countUnsupported(drawing, rec.type || '不明');
+      }
+    } catch {
+      // 1つの図形がおかしくても、そこであきらめず残りを読み続ける（落とし穴7）
+      countUnsupported(drawing, `${rec.type || '不明'}（読み取り失敗）`);
+    }
+  }
+}
+
+// ============================================================
+// 入口
+// ============================================================
+
+/**
+ * DXFの文字列を読んで図形データにする。
+ * @param {string} text DXFファイルの中身
+ * @returns {object} src/drawing.js に定義された形の図形データ
+ */
+export function parseDxf(text) {
+  if (isBinaryDxf(text)) {
+    throw new Error(
+      'このDXFは特殊な形式（バイナリDXF）です。CADで「DXF（文字形式）」として保存し直してください。'
+    );
+  }
+
+  const drawing = createDrawing('dxf');
+
+  let sections;
+  try {
+    const pairs = tokenize(text);
+    sections = collectSections(pairs);
+  } catch {
+    // ここまで来て失敗するのは想定外の壊れ方。空の図面を返す（落ちない）
+    return finishDrawing(drawing);
+  }
+
+  const { layers, blocks, topEntityRecords } = sections;
+  drawing.layers = Array.from(layers.values());
+
+  const rootCtx = {
+    transform: IDENTITY_MATRIX,
+    rotationDeg: 0,
+    scale: 1,
+    inheritedColor: aciToCss(0), // トップレベルのBYBLOCKは黒として扱う（drawing.jsの決まりに合わせる）
+    depth: 0,
+  };
+
+  expandRecords(topEntityRecords, drawing, rootCtx, blocks, layers);
+
+  return finishDrawing(drawing);
+}

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<!--
+  iPadでの表示のための指定（開発ルール11章）。
+  user-scalable=no は「ブラウザ自体のピンチ拡大」を止めるためのもの。
+  図面を拡大縮小する操作は、このアプリ側（src/ui/gestures.js）で自前に作る。
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>DWG・DXFビューア</title>
+<link rel="stylesheet" href="./src/ui/ui.css">
+</head>
+<body>
+
+  <!-- 図面を描くキャンバス。画面いっぱいに敷く。 -->
+  <canvas id="draw-canvas"></canvas>
+
+  <!-- 版番号（画面右上）。src/ui/app.js が起動時に src/version.js から読んで表示する。 -->
+  <div id="version-badge" class="version-badge"></div>
+
+  <!-- ボタン類（図面を開く／全体表示／拡大／縮小）。中身は src/ui/toolbar.js が作る。 -->
+  <div id="toolbar" class="toolbar" role="toolbar" aria-label="操作ボタン"></div>
+
+  <!-- 読み込み中の表示。大きな図面は時間がかかるので、必ず出す。 -->
+  <div id="loading-overlay" class="overlay" hidden>
+    <div class="overlay-box">
+      <div class="spinner" aria-hidden="true"></div>
+      <p>読み込み中…</p>
+    </div>
+  </div>
+
+  <!-- 部品（viewport.js・render.js）がまだ準備できていないときの案内。 -->
+  <div id="prepare-banner" class="banner banner-info" hidden>
+    <span class="banner-text">図面を表示する部品を準備中です。しばらくしてからもう一度お試しください。</span>
+  </div>
+
+  <!-- 読み込みに失敗したときのお知らせ。 -->
+  <div id="error-banner" class="banner banner-error" role="alert" hidden>
+    <span id="error-text" class="banner-text"></span>
+    <button type="button" id="error-close" class="banner-close" aria-label="このお知らせを閉じる">×</button>
+  </div>
+
+  <!-- 表示できなかった図形があったときのお知らせ（開発ルール10.5）。 -->
+  <div id="unsupported-banner" class="banner banner-warning" role="status" hidden>
+    <span id="unsupported-text" class="banner-text"></span>
+    <button type="button" id="unsupported-close" class="banner-close" aria-label="このお知らせを閉じる">×</button>
+  </div>
+
+  <!-- Safari以外のブラウザで開いたときの、ホーム画面追加の案内（開発ルール11.3）。 -->
+  <div id="browser-hint" class="hint" hidden>
+    <span class="hint-text">電波の無い場所でも使うなら、Safariで開いてホーム画面に追加してください。</span>
+    <button type="button" id="browser-hint-close" class="hint-close" aria-label="この案内を閉じる">×</button>
+  </div>
+
+  <!-- 画面の入口はここ1つだけ（開発ルール9.4・2.1）。あとは import でつなぐ。 -->
+  <script type="module" src="./src/ui/app.js"></script>
+</body>
+</html>
