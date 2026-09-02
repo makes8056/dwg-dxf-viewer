@@ -147,7 +147,12 @@ function redraw() {
   if (!viewportMod || !renderMod || !viewport || !currentDrawing) return;
 
   try {
-    renderMod.renderDrawing(ctx, currentDrawing, viewport, {});
+    // 【iPadの不具合対策】画面の細かさ（iPadは2倍）を必ず渡す。
+    // 渡さないと render.js が1倍で描き、図面が画面の左上4分の1に縮こまる。
+    // render.js 側でも自分で計算し直すようにしてあるが、二重に守っておく。
+    renderMod.renderDrawing(ctx, currentDrawing, viewport, {
+      dpr: window.devicePixelRatio || 1,
+    });
   } catch (err) {
     console.error('[DXFビューア] 描画に失敗しました。', err);
     showError(

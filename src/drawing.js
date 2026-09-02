@@ -29,7 +29,10 @@
 //   polyline … 折れ線          { points: [[x,y], ...], closed }
 //   arc      … 円弧            { cx, cy, r, startAngle, endAngle }  角度は度。反時計回り
 //   circle   … 円              { cx, cy, r }
-//   text     … 文字            { x, y, height, rotation, text }
+//   text     … 文字            { x, y, height, rotation, text, hAlign, vAlign }
+//              hAlign … 書き出す点の左端/中央/右端のどこに置くか left|center|right
+//              vAlign … 上/中/下のどこに置くか top|middle|bottom|baseline
+//              寸法の数字は中央ぞろえ。無視すると寸法線から数字がずれる
 //
 // すべての図形が共通して持つもの： type, layer, color
 //   layer … レイヤー名（文字列）

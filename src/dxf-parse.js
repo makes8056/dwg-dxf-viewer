@@ -275,7 +275,20 @@ function parseLayerTable(pairs, i, layers) {
           const colorNumber = colorRaw === undefined ? 7 : Math.abs(num(colorRaw, 7));
           color = aciToCss(colorNumber);
         }
-        layers.set(name, { name, color });
+        // レイヤーが画面に出るかどうか。CADで消してあるものは、ここでも出さない。
+        //   - 色番号がマイナス … そのレイヤーは「非表示（OFF）」
+        //   - 70の1のビットが立っている … そのレイヤーは「凍結（FROZEN）」
+        // どちらもCADの画面には出ないので、このアプリでも出さない。
+        const layerFlags = num(firstValue(rec.groups, 70), 0);
+        const isOff = colorRaw !== undefined && num(colorRaw, 7) < 0;
+        const isFrozen = (layerFlags & 1) === 1;
+        const visible = !isOff && !isFrozen;
+
+        // 前後の空白を取り除いてから登録する。
+        // 図形の側（getLayerName）も取り除いた名前で引くので、両方そろえないと
+        // **色も表示・非表示も引けなくなる**（図面が真っ黒になる／消えるはずのものが出る）。
+        const key = String(name).trim();
+        layers.set(key, { name: key, color, visible });
       }
       i = rec.nextIndex;
       continue;
@@ -534,7 +547,7 @@ function emitPolyline(drawing, ctx, layer, color, points, closed) {
   drawing.entities.push({ type: 'polyline', layer, color, points: pts, closed });
 }
 
-function emitText(drawing, ctx, layer, color, x, y, height, rotation, text) {
+function emitText(drawing, ctx, layer, color, x, y, height, rotation, text, align) {
   const [X, Y] = applyMatrix(ctx.transform, x, y);
   drawing.entities.push({
     type: 'text',
@@ -545,6 +558,10 @@ function emitText(drawing, ctx, layer, color, x, y, height, rotation, text) {
     height: height * ctx.scale,
     rotation: rotation + ctx.rotationDeg,
     text,
+    // 文字を書き出す点の、どこに文字を置くか（左端／中央／右端・上／中／下）。
+    // 寸法の数字は「中央ぞろえ」で置かれるので、ここを無視すると線からずれる。
+    hAlign: (align && align.h) || 'left',
+    vAlign: (align && align.v) || 'baseline',
   });
 }
 
@@ -616,6 +633,38 @@ function convertText(rec, drawing, ctx, layerColorMap) {
   emitText(drawing, ctx, layer, color, x, y, height, rotation, text);
 }
 
+/**
+ * MTEXT（長い文字）の傾きを求める。
+ *
+ * 【実物の図面で見つかった不具合】
+ * 寸法の数字だけが、いつも水平に出ていました。
+ * CADでは寸法線に沿って傾いているのに、です。
+ *
+ * ふつうの文字（TEXT）は「何度傾ける」という書き方（コード50）ですが、
+ * MTEXTは **「文字がどちらを向いているか」を矢印（ベクトル）で書くことが多い**
+ * （コード11がヨコ方向、コード21がタテ方向）。
+ * お客様の参考図.dxf には (11, 21) = (0, 1) という寸法がありました。
+ * これは「真上を向く」＝90度傾いている、という意味です。
+ * この矢印を読まずに水平のままにしていたのが原因でした。
+ *
+ * @param {Array<[number,string]>} groups
+ * @returns {number} 傾き（度）
+ */
+function mtextRotationDeg(groups) {
+  const dx = firstValue(groups, 11);
+  const dy = firstValue(groups, 21);
+  if (dx !== undefined || dy !== undefined) {
+    const x = num(dx, 0);
+    const y = num(dy, 0);
+    // 矢印の長さが0のときは向きが決まらないので、下の 50 に任せる
+    if (x !== 0 || y !== 0) {
+      return normalizeAngle((Math.atan2(y, x) * 180) / Math.PI);
+    }
+  }
+  // 矢印が無い図面では、ふつうの文字と同じ「何度」の書き方を使う
+  return num(firstValue(groups, 50), 0);
+}
+
 function convertMText(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
   const flip = isExtrusionFlippedX(g);
@@ -624,7 +673,7 @@ function convertMText(rec, drawing, ctx, layerColorMap) {
   const x = flipXIf(flip, num(firstValue(g, 10)));
   const y = num(firstValue(g, 20));
   const height = num(firstValue(g, 40), 2.5);
-  const rotation = mirrorRotation(flip, num(firstValue(g, 50)));
+  const rotation = mirrorRotation(flip, mtextRotationDeg(g));
 
   // 長い文字列は 3 が前半、1 が最後の続きになっている（250文字ずつの分割）
   let raw = '';
@@ -633,7 +682,24 @@ function convertMText(rec, drawing, ctx, layerColorMap) {
   }
   raw += String(firstValue(g, 1) ?? '');
 
-  emitText(drawing, ctx, layer, color, x, y, height, rotation, cleanMText(raw));
+  emitText(drawing, ctx, layer, color, x, y, height, rotation, cleanMText(raw), mtextAlign(g));
+}
+
+/**
+ * MTEXTの「書き出す点のどこに文字を置くか」（コード71）を読む。
+ *
+ * 寸法の数字は 5（中央のまん中）で書かれています。
+ * ここを読まずに左端から書くと、**数字が寸法線からずれて見えます。**
+ *
+ *   1:左上   2:中央上   3:右上
+ *   4:左中   5:中央中   6:右中
+ *   7:左下   8:中央下   9:右下
+ */
+function mtextAlign(groups) {
+  const n = num(firstValue(groups, 71), 1);
+  const h = n % 3 === 1 ? 'left' : n % 3 === 2 ? 'center' : 'right';
+  const v = n <= 3 ? 'top' : n <= 6 ? 'middle' : 'bottom';
+  return { h, v };
 }
 
 // MTEXTの書式指定を取り除いて、素の文字だけにする
@@ -879,9 +945,42 @@ function expandInsert(rec, drawing, ctx, blocks, layerColorMap) {
 // （ENTITIESセクションの並びにも、BLOCK定義の中身にも使う）
 // ============================================================
 
+/**
+ * その図形が「CADの画面に出ないもの」かどうかを判断する。
+ *
+ * 【実物の図面で分かったこと。ここを読まないと図面がぐちゃぐちゃになります】
+ *
+ * お客様の参考図.dxf には、**「見えない」指定が付いた図形が805個**ありました。
+ * これはAutoCADの「動的ブロック」の仕組みです。
+ * ひとつの部品の中に、ありうる形を**全部まとめて持たせておき**、
+ * 「今回はこの形を使う」という指定で切り替えます。
+ * 使わない形の図形には「見えない」印（コード60 が 1）が付きます。
+ *
+ * この印を読まずに全部描くと、**切り替えたはずの形が全部重なって出てしまいます。**
+ * 実際にそうなっていました。
+ *
+ * レイヤーが消してある場合（非表示・凍結）も、CADの画面には出ないので出しません。
+ */
+function isHiddenEntity(rec, layerColorMap) {
+  // コード60 が 1 → この図形は表示しない、という指定
+  const invisible = firstValue(rec.groups, 60);
+  if (invisible !== undefined && num(invisible, 0) === 1) return true;
+
+  // レイヤーごと消してある場合（非表示OFF・凍結FROZEN）
+  const layer = layerColorMap.get(getLayerName(rec.groups));
+  if (layer && layer.visible === false) return true;
+
+  return false;
+}
+
 function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
   for (let i = 0; i < records.length; i++) {
     const rec = records[i];
+    // CADの画面に出ない図形は、ここで外す。
+    // これは「表示できなかった」ではなく「もともと出さないもの」なので、
+    // unsupported には数えない（数えると本当に足りない図形が埋もれる）。
+    const hidden = isHiddenEntity(rec, layerColorMap);
+    if (hidden) drawing.hiddenCount = (drawing.hiddenCount || 0) + 1;
     try {
       if (rec.type === 'POLYLINE') {
         const vertexRecs = [];
@@ -891,13 +990,16 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
           j++;
         }
         if (j < records.length && records[j].type === 'SEQEND') j++;
-        convertOldPolyline(rec, vertexRecs, drawing, ctx, layerColorMap);
+        // 「見えない」指定のときは、続きのVERTEXごと飛ばす
+        if (!hidden) convertOldPolyline(rec, vertexRecs, drawing, ctx, layerColorMap);
         i = j - 1;
         continue;
       }
       if (rec.type === 'VERTEX' || rec.type === 'SEQEND') {
         continue; // POLYLINEの外に出てきた場合は無視（壊れたファイル対策）
       }
+      // ここから下は、見えない指定が付いていたら何もしない
+      if (hidden) continue;
       if (rec.type === 'LINE') {
         convertLine(rec, drawing, ctx, layerColorMap);
       } else if (rec.type === 'LWPOLYLINE') {

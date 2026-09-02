@@ -26,10 +26,39 @@ const MIN_READABLE_TEXT_PX = 5; // これより小さい文字は描かない（
  * @param {object} [options] { background, lineWidth, dpr }
  * @returns {{drawn:number, skipped:number}} 描いた数・省いた数
  */
+/**
+ * 画面の細かさ（何倍で描くか）を、キャンバス自身から読み取る。
+ *
+ * 【iPadで起きた本番不具合。ここを1倍に決め打ちしてはいけない】
+ *
+ * iPadの画面は細かいので、キャンバスは「見た目の大きさ × 2倍」の点数で作られます。
+ * ところがここで1倍と決めつけて描くと、**2倍の広さに1倍で描く**ことになり、
+ * 図面が画面の**左上4分の1にだけ縮こまって**表示されます。実際にそうなりました。
+ *
+ * パソコンの画面はたいてい1倍なので、**この不具合はパソコンでは絶対に再現しません。**
+ *
+ * 呼び出す側が倍率を渡し忘れても正しく描けるよう、
+ * ここでキャンバスの実際の点数と見た目の大きさから計算して求めます。
+ *
+ * @param {CanvasRenderingContext2D} ctx
+ * @param {object} viewport
+ * @returns {number} 倍率（ふつうは1か2、または3）
+ */
+function inferDpr(ctx, viewport) {
+  const canvasPixels = ctx && ctx.canvas ? ctx.canvas.width : 0;
+  const cssWidth = viewport && viewport.width;
+  if (canvasPixels > 0 && cssWidth > 0) {
+    const ratio = canvasPixels / cssWidth;
+    // ありえない値（キャンバスの大きさがまだ決まっていない等）は使わない
+    if (ratio > 0.1 && ratio < 8) return ratio;
+  }
+  return DEFAULT_DPR;
+}
+
 export function renderDrawing(ctx, drawing, viewport, options = {}) {
   const background = options.background || DEFAULT_BACKGROUND;
   const lineWidthPx = options.lineWidth || DEFAULT_LINE_WIDTH;
-  const dpr = options.dpr || DEFAULT_DPR;
+  const dpr = options.dpr || inferDpr(ctx, viewport);
 
   const cssWidth = viewport.width;
   const cssHeight = viewport.height;
@@ -182,8 +211,11 @@ function drawText(ctx, e, vp) {
   ctx.save();
   ctx.fillStyle = e.color || '#000000';
   ctx.font = `${fontPx}px sans-serif`;
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
+  // 文字を書き出す点の、どこに文字を置くか（drawing.js の hAlign / vAlign）。
+  // 寸法の数字は「中央ぞろえ」で置かれるので、ここを左端に決め打ちすると
+  // 数字が寸法線からずれて見える。
+  ctx.textAlign = e.hAlign || 'left';
+  ctx.textBaseline = e.vAlign || 'alphabetic';
   ctx.translate(sx, sy);
   // 回転も、円弧と同じ理由で符号を反転させる（図面の反時計回り→画面では逆向き）
   ctx.rotate(-((rotationDeg * Math.PI) / 180));

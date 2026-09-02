@@ -347,3 +347,78 @@ test('図面の範囲に、寸法も含まれる', () => {
   const d = load('dimension.dxf');
   assert.ok(d.bounds.maxY >= 260, `寸法の高さが範囲に入っていない: ${JSON.stringify(d.bounds)}`);
 });
+
+// ============================================================
+// CADで消してあるものを出さない（実物の図面で判明）
+//
+// お客様の参考図.dxf には「見えない」指定が付いた図形が805個あった。
+// AutoCADの「動的ブロック」は、ひとつの部品の中にありうる形を全部持たせておき、
+// 「今回はこの形」という指定で切り替える。使わない形には「見えない」印が付く。
+// これを読まずに全部描くと、切り替えたはずの形が全部重なって出てしまう。
+// ============================================================
+
+test('図形ごとの「見えない」指定（コード60）が付いたものは出さない', () => {
+  const d = load('visibility.dxf');
+  const ys = only(d, 'line').map((l) => l.y1);
+  assert.ok(!ys.includes(30), `「見えない」指定の線が出てしまっている: ${JSON.stringify(ys)}`);
+});
+
+test('非表示（OFF）のレイヤーの図形は出さない', () => {
+  // CADで消してあるレイヤーは、色番号がマイナスで書かれている
+  const d = load('visibility.dxf');
+  const ys = only(d, 'line').map((l) => l.y1);
+  assert.ok(!ys.includes(10), `消したレイヤーの線が出てしまっている: ${JSON.stringify(ys)}`);
+});
+
+test('凍結（FROZEN）のレイヤーの図形は出さない', () => {
+  const d = load('visibility.dxf');
+  const ys = only(d, 'line').map((l) => l.y1);
+  assert.ok(!ys.includes(20), `凍結レイヤーの線が出てしまっている: ${JSON.stringify(ys)}`);
+});
+
+test('表示されているレイヤーの図形は、ちゃんと出る', () => {
+  // 消しすぎていないことの確認。ここが消えると図面が真っ白になる
+  const d = load('visibility.dxf');
+  const ys = only(d, 'line').map((l) => l.y1);
+  assert.deepEqual(ys, [0], `出るべき線が出ていない: ${JSON.stringify(ys)}`);
+});
+
+test('消した図形の数を数えている（あとで調べられるように）', () => {
+  const d = load('visibility.dxf');
+  assert.equal(d.hiddenCount, 3, '見えない指定1本＋消したレイヤー1本＋凍結1本で3本');
+});
+
+test('消した図形は「表示できませんでした」には数えない', () => {
+  // もともと出さないものなので、数えると本当に足りない図形が埋もれる
+  const d = load('visibility.dxf');
+  assert.equal(d.unsupported.count, 0, `余計なものを数えている: ${JSON.stringify(d.unsupported.kinds)}`);
+});
+
+// ============================================================
+// 文字の向き（実物の図面で判明）
+//
+// 寸法の数字だけ、いつも水平に出ていた。
+// MTEXTは「何度傾ける」ではなく「どちらを向いているか」を矢印で書くことが多い。
+// ============================================================
+
+test('MTEXTの向きが矢印（11,21）で書かれていたら、その向きに傾ける', () => {
+  const d = load('visibility.dxf');
+  const t = only(d, 'text').find((e) => e.text === 'たて書き');
+  assert.ok(t, 'たて書きの文字が見つからない');
+  assert.equal(Math.round(t.rotation), 90, `真上を向く指定が反映されていない（実際は ${t.rotation}度）`);
+});
+
+test('向きの矢印が無いMTEXTは水平のまま', () => {
+  const d = load('visibility.dxf');
+  const t = only(d, 'text').find((e) => e.text === 'よこ書き');
+  assert.ok(t, 'よこ書きの文字が見つからない');
+  assert.equal(t.rotation, 0);
+});
+
+test('寸法の数字は「中央ぞろえ」で置かれる', () => {
+  // ここを左端で置くと、数字が寸法線からずれて見える
+  const d = load('visibility.dxf');
+  const t = only(d, 'text').find((e) => e.text === 'たて書き');
+  assert.equal(t.hAlign, 'center', '中央ぞろえになっていない');
+  assert.equal(t.vAlign, 'middle', '上下の中央になっていない');
+});
