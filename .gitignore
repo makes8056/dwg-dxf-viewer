@@ -1,0 +1,16 @@
+# ユーザーが置いた資料・図面（アプリの一部ではないのでコミットしない）
+*.dwg
+*.dxf
+*.bak
+*.pdf
+plot.log
+
+# OS・エディタが作るもの
+Thumbs.db
+desktop.ini
+.DS_Store
+node_modules/
+
+# ただしテスト用の見本ファイルだけは例外（アプリの一部として残す）
+!tests/fixtures/*.dxf
+!tests/fixtures/*.dwg
