@@ -445,6 +445,32 @@ function getLayerName(groups) {
   return v === undefined ? '0' : String(v).trim();
 }
 
+/**
+ * その図形が「実際に」属するレイヤー名を求める。
+ *
+ * 【AutoCADの大事な決まり。これを知らないと色が変わってしまいます】
+ *
+ * ブロック（部品）の中身がレイヤー「0」に描かれている場合、
+ * その中身は **その部品を置いた側のレイヤーに従います。**
+ *
+ * 実物の図面（参考図.dxf）がまさにこれでした：
+ *   - エルボの部品を置いた場所 … レイヤー PIPE（赤）
+ *   - 部品の中身が描かれている場所 … レイヤー 0（黒）
+ * CADではエルボは赤く出ます。ところがこの決まりを知らないと、
+ * レイヤー0の黒で描いてしまい、**配管が赤いのにエルボだけ黒**になります。
+ * 実際にそうなっていました。
+ *
+ * レイヤー0以外に描かれている中身は、そのレイヤーのままです（決まりどおり）。
+ *
+ * @param {Array<[number,string]>} groups その図形のグループコード
+ * @param {object} ctx 展開中の状態（insertLayer に、置いた側のレイヤー名が入っている）
+ */
+function effectiveLayer(groups, ctx) {
+  const own = getLayerName(groups);
+  if (own === '0' && ctx && ctx.insertLayer) return ctx.insertLayer;
+  return own;
+}
+
 // ============================================================
 // bulge（ふくらみ）付きの区間を円弧にする
 //
@@ -586,7 +612,7 @@ function emitPolylineWithBulge(drawing, ctx, layer, color, vertices, closed) {
 function convertLine(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
   const flip = isExtrusionFlippedX(g);
-  const layer = getLayerName(g);
+  const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
   const x1 = flipXIf(flip, num(firstValue(g, 10)));
   const y1 = num(firstValue(g, 20));
@@ -598,7 +624,7 @@ function convertLine(rec, drawing, ctx, layerColorMap) {
 function convertCircle(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
   const flip = isExtrusionFlippedX(g);
-  const layer = getLayerName(g);
+  const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
   const cx = flipXIf(flip, num(firstValue(g, 10)));
   const cy = num(firstValue(g, 20));
@@ -609,7 +635,7 @@ function convertCircle(rec, drawing, ctx, layerColorMap) {
 function convertArc(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
   const flip = isExtrusionFlippedX(g);
-  const layer = getLayerName(g);
+  const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
   const cx = flipXIf(flip, num(firstValue(g, 10)));
   const cy = num(firstValue(g, 20));
@@ -623,7 +649,7 @@ function convertArc(rec, drawing, ctx, layerColorMap) {
 function convertText(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
   const flip = isExtrusionFlippedX(g);
-  const layer = getLayerName(g);
+  const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
   const x = flipXIf(flip, num(firstValue(g, 10)));
   const y = num(firstValue(g, 20));
@@ -668,7 +694,7 @@ function mtextRotationDeg(groups) {
 function convertMText(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
   const flip = isExtrusionFlippedX(g);
-  const layer = getLayerName(g);
+  const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
   const x = flipXIf(flip, num(firstValue(g, 10)));
   const y = num(firstValue(g, 20));
@@ -761,7 +787,7 @@ function cleanMText(raw) {
 function convertLwpolyline(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
   const flip = isExtrusionFlippedX(g);
-  const layer = getLayerName(g);
+  const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
   const flags = num(firstValue(g, 70), 0);
   const closed = (flags & 1) === 1;
@@ -792,7 +818,7 @@ function convertLwpolyline(rec, drawing, ctx, layerColorMap) {
 function convertOldPolyline(headerRec, vertexRecs, drawing, ctx, layerColorMap) {
   const g = headerRec.groups;
   const flip = isExtrusionFlippedX(g);
-  const layer = getLayerName(g);
+  const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
   const flags = num(firstValue(g, 70), 0);
   const closed = (flags & 1) === 1;
@@ -818,7 +844,7 @@ function convertOldPolyline(headerRec, vertexRecs, drawing, ctx, layerColorMap) 
 function convertSolid(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
   const flip = isExtrusionFlippedX(g);
-  const layer = getLayerName(g);
+  const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
   const p1 = [flipXIf(flip, num(firstValue(g, 10))), num(firstValue(g, 20))];
   const p2 = [flipXIf(flip, num(firstValue(g, 11))), num(firstValue(g, 21))];
@@ -871,7 +897,7 @@ function expandDimension(rec, drawing, ctx, blocks, layerColorMap) {
     return;
   }
 
-  const layer = getLayerName(g);
+  const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
 
   const childCtx = {
@@ -882,6 +908,8 @@ function expandDimension(rec, drawing, ctx, blocks, layerColorMap) {
     // 部品の中で「親に従う色」が使われていたら、この寸法の色にする
     inheritedColor: color,
     depth: ctx.depth + 1,
+    // 部品の中身がレイヤー0に描かれていたら、この寸法のレイヤーに従わせる（AutoCADの決まり）
+    insertLayer: layer,
     // ここから下は寸法の内側。中の「目印の点」を数えないための印
     insideDimension: true,
   };
@@ -903,7 +931,7 @@ function expandInsert(rec, drawing, ctx, blocks, layerColorMap) {
   }
 
   const flip = isExtrusionFlippedX(g);
-  const layer = getLayerName(g);
+  const layer = effectiveLayer(g, ctx);
   const insertColor = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
 
   const insertX = flipXIf(flip, num(firstValue(g, 10)));
@@ -929,6 +957,10 @@ function expandInsert(rec, drawing, ctx, blocks, layerColorMap) {
     scale: ctx.scale * ((Math.abs(scaleX) + Math.abs(scaleY)) / 2),
     inheritedColor: insertColor,
     depth: ctx.depth + 1,
+    // 【AutoCADの決まり】部品の中身がレイヤー0に描かれていたら、
+    // その中身は**この部品を置いた側のレイヤー**に従う（effectiveLayer 参照）。
+    // これを渡さないと、配管が赤いのにエルボだけ黒、といったことが起きる。
+    insertLayer: layer,
     // 寸法の内側かどうかは、その下の部品にも引き継ぐ（矢印は部品として入っている）
     insideDimension: ctx.insideDimension === true,
   };
@@ -961,13 +993,13 @@ function expandInsert(rec, drawing, ctx, blocks, layerColorMap) {
  *
  * レイヤーが消してある場合（非表示・凍結）も、CADの画面には出ないので出しません。
  */
-function isHiddenEntity(rec, layerColorMap) {
+function isHiddenEntity(rec, layerColorMap, ctx) {
   // コード60 が 1 → この図形は表示しない、という指定
   const invisible = firstValue(rec.groups, 60);
   if (invisible !== undefined && num(invisible, 0) === 1) return true;
 
   // レイヤーごと消してある場合（非表示OFF・凍結FROZEN）
-  const layer = layerColorMap.get(getLayerName(rec.groups));
+  const layer = layerColorMap.get(effectiveLayer(rec.groups, ctx));
   if (layer && layer.visible === false) return true;
 
   return false;
@@ -979,7 +1011,7 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
     // CADの画面に出ない図形は、ここで外す。
     // これは「表示できなかった」ではなく「もともと出さないもの」なので、
     // unsupported には数えない（数えると本当に足りない図形が埋もれる）。
-    const hidden = isHiddenEntity(rec, layerColorMap);
+    const hidden = isHiddenEntity(rec, layerColorMap, ctx);
     if (hidden) drawing.hiddenCount = (drawing.hiddenCount || 0) + 1;
     try {
       if (rec.type === 'POLYLINE') {
