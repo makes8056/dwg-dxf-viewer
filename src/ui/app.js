@@ -502,13 +502,44 @@ async function printSelectedArea(rectScreen) {
   await waitForImage(printImage);
 
   printArea.hidden = false;
-  try {
-    window.print();
-  } finally {
-    // 印刷画面を閉じたあと、画面に絵が残らないよう必ず片付ける
+
+  // 【iPadで起きた本番不具合。ここを元に戻さないこと】
+  //
+  // iPadのSafariでは `window.print()` が **すぐに戻ってきます。**
+  // 印刷の画面は、そのあとから開きます。
+  // 以前はこの直後に絵を片付けていたため、**印刷される前に絵が消えていました。**
+  // その結果、紙には図面ではなく「印刷する図面」という代わりの文字だけが出ました
+  // （実際にそう印刷された紙を確認済み）。
+  //
+  // パソコンでは `window.print()` が印刷画面を閉じるまで待つので、
+  // **この不具合はパソコンでは絶対に再現しません。**
+  //
+  // そこで、片付けは「印刷が終わった合図（afterprint）」で行います。
+  schedulePrintCleanup();
+  window.print();
+}
+
+/**
+ * 印刷が終わったら、絵を片付ける。
+ *
+ * `window.print()` の直後に片付けてはいけない（上の説明を参照）。
+ * afterprint が来ない環境もあるので、時間切れの保険も置く。
+ */
+function schedulePrintCleanup() {
+  let done = false;
+  const cleanup = () => {
+    if (done) return;
+    done = true;
+    window.removeEventListener('afterprint', cleanup);
+    clearTimeout(timer);
     printArea.hidden = true;
     printImage.removeAttribute('src');
-  }
+    document.body.classList.remove('print-landscape', 'print-portrait');
+  };
+  window.addEventListener('afterprint', cleanup);
+  // afterprint が来ない環境のための保険。
+  // 長めに待つ（印刷画面で紙やプリンターを選ぶ時間が要るため）。
+  const timer = setTimeout(cleanup, 120000);
 }
 
 /**
@@ -516,15 +547,35 @@ async function printSelectedArea(rectScreen) {
  * ここを待たずに印刷すると、**紙が白紙になる**（絵がまだ無いまま印刷される）。
  * @param {HTMLImageElement} img
  */
-function waitForImage(img) {
-  return new Promise((resolve) => {
+async function waitForImage(img) {
+  // 1. まず「読み込みが終わった」ことを確かめる。ここは必ず終わる。
+  await new Promise((resolve) => {
     if (img.complete && img.naturalWidth > 0) { resolve(); return; }
-    const done = () => { img.removeEventListener('load', done); img.removeEventListener('error', done); resolve(); };
+    const done = () => {
+      img.removeEventListener('load', done);
+      img.removeEventListener('error', done);
+      resolve();
+    };
     img.addEventListener('load', done);
     img.addEventListener('error', done);
     // 万一いつまでも終わらないときも、印刷を止めない
-    setTimeout(done, 3000);
+    setTimeout(done, 5000);
   });
+
+  // 2. さらに「もう描ける状態」まで待てるなら待つ（decode）。
+  //
+  // 【落とし穴。ここに時間切れが要る理由】
+  // decode() は、**画面に出していない絵（display:none）では終わらないことがあります。**
+  // 印刷用の絵はふだん画面に出していないので、まさにこれに当たります。
+  // 時間切れを付けずに待つと、**印刷ボタンを押しても何も起きません**（実際にそうなった）。
+  //
+  // 読み込みは1で確かめてあるので、decode が終わらなくても印刷して構いません。
+  if (typeof img.decode === 'function') {
+    await Promise.race([
+      img.decode().catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 1000)),
+    ]);
+  }
 }
 
 attachToolbar(toolbarEl, {
