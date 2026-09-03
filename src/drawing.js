@@ -35,7 +35,9 @@
 //              startAngle/endAngle … 楕円のどこからどこまで描くか（度）
 //   text     … 文字            { x, y, height, rotation, text, hAlign, vAlign }
 //              hAlign … 書き出す点の左端/中央/右端のどこに置くか left|center|right
-//              vAlign … 上/中/下のどこに置くか top|middle|bottom|baseline
+//              vAlign … 上/中/下のどこに置くか top|middle|bottom|alphabetic
+//              ※Canvasが受け付ける名前をそのまま使う。
+//                "baseline" という名前は**存在しない**ので使わないこと
 //              寸法の数字は中央ぞろえ。無視すると寸法線から数字がずれる
 //
 // すべての図形が共通して持つもの： type, layer, color

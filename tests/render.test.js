@@ -288,3 +288,69 @@ test('部分的な楕円（C字）は、その範囲だけ描く', () => {
     `回り幅が290度になっていない（実際は ${sweepDeg}度）`
   );
 });
+
+// ============================================================
+// 文字の縦位置に、Canvasが知らない名前を渡さない
+//
+// 【実際に起きた不具合】
+// 'baseline' という名前を渡していたが、**Canvasにその名前は存在しない。**
+// 存在しない名前を渡すと、ブラウザは黙って無視する。
+// 無視されると直前に描いた文字の縦位置がそのまま残り、文字がずれて出る。
+// ブラウザの記録に警告が出続けていたが、画面には出ないので気づきにくかった。
+// ============================================================
+
+// Canvasが受け付ける縦位置の名前は、この6つだけ
+const CANVAS_BASELINES = ['top', 'hanging', 'middle', 'alphabetic', 'ideographic', 'bottom'];
+
+test('文字の縦位置は、必ずCanvasが受け付ける名前になる', () => {
+  const ctx = makeFakeCtx(1000, 600);
+  const vp = createViewport(1000, 600);
+  fitToBounds(vp, { minX: 0, minY: 0, maxX: 100, maxY: 60 });
+
+  // 'baseline' は存在しない名前。これがそのまま渡ってはいけない。
+  const drawing = {
+    ...SAMPLE,
+    entities: [
+      { type: 'text', layer: '0', color: '#000', x: 50, y: 30, height: 10,
+        rotation: 0, text: 'あ', hAlign: 'left', vAlign: 'baseline' },
+    ],
+  };
+  renderDrawing(ctx, drawing, vp, {});
+  assert.ok(
+    CANVAS_BASELINES.includes(ctx.textBaseline),
+    `Canvasが知らない名前を渡している：「${ctx.textBaseline}」。` +
+      'ブラウザに無視され、直前の文字の縦位置が残って文字がずれる'
+  );
+});
+
+test('知らない名前が来ても、いちばん普通の縦位置に落ち着く', () => {
+  const ctx = makeFakeCtx(1000, 600);
+  const vp = createViewport(1000, 600);
+  fitToBounds(vp, { minX: 0, minY: 0, maxX: 100, maxY: 60 });
+  const drawing = {
+    ...SAMPLE,
+    entities: [
+      { type: 'text', layer: '0', color: '#000', x: 50, y: 30, height: 10,
+        rotation: 0, text: 'あ', vAlign: 'なにこれ' },
+    ],
+  };
+  renderDrawing(ctx, drawing, vp, {});
+  assert.equal(ctx.textBaseline, 'alphabetic');
+});
+
+test('中央ぞろえ（寸法の数字）は、そのまま中央のまま', () => {
+  // 直しすぎて、寸法の数字の位置まで変えてしまわないことの確認
+  const ctx = makeFakeCtx(1000, 600);
+  const vp = createViewport(1000, 600);
+  fitToBounds(vp, { minX: 0, minY: 0, maxX: 100, maxY: 60 });
+  const drawing = {
+    ...SAMPLE,
+    entities: [
+      { type: 'text', layer: '0', color: '#000', x: 50, y: 30, height: 10,
+        rotation: 0, text: '250', hAlign: 'center', vAlign: 'middle' },
+    ],
+  };
+  renderDrawing(ctx, drawing, vp, {});
+  assert.equal(ctx.textBaseline, 'middle');
+  assert.equal(ctx.textAlign, 'center');
+});

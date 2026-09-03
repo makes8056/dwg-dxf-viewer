@@ -12,7 +12,14 @@ import { APP_VERSION } from '../version.js';
 import { attachToolbar } from './toolbar.js';
 import { setupFileOpen } from './file-open.js';
 import { attachGestures } from './gestures.js';
-import { saveDrawing, loadLatestDrawing } from '../storage.js';
+import {
+  saveDrawing,
+  loadLatestDrawing,
+  loadDrawing,
+  listDrawings,
+  forgetDrawing,
+} from '../storage.js';
+import { createDrawingList } from './drawing-list.js';
 import { startUpdateCheck } from '../update-check.js';
 
 // ------------------------------------------------------------
@@ -79,6 +86,7 @@ async function loadPartnerModules() {
 // ------------------------------------------------------------
 let viewport = null;         // viewport.js が管理する「今どこを見ているか」の状態
 let currentDrawing = null;   // 読み込み済みの図面データ（src/drawing.js の形）
+let currentName = null;      // 今開いている図面のファイル名（一覧で「表示中」を出すのに使う）
 let redrawScheduled = false; // requestAnimationFrame の多重予約を防ぐ
 
 function ensureViewport() {
@@ -254,28 +262,19 @@ function showUnsupported(drawing) {
     );
   }
 
-  // 図面本体から遠く離れた図形（消し忘れの線など）があることも隠さず伝える。
-  // 全体表示はこれらを外して図面本体に合わせているため、
-  // 何も言わないと「図面の一部が無い」と誤解される。
-  const outliers = drawing && drawing.outliers;
-  if (outliers) {
-    // 【ユーザーからの指摘】「3個あります」とだけ出していたら、
-    // CADで探しても見つけられなかった。**何がどこにあるかまで書く。**
-    const kindName = { text: '文字', line: '線', polyline: '折れ線', arc: '円弧', circle: '円', ellipse: '楕円' };
-    const details = (drawing.outlierList || []).slice(0, 3).map((o) => {
-      const what = kindName[o.type] || o.type;
-      const label = o.text ? `「${o.text}」` : '';
-      const where = `レイヤー「${o.layer}」・座標 ${o.x}, ${o.y}`;
-      return `${what}${label}（${where}）`;
-    });
-
-    messages.push(
-      `図面から遠く離れた場所に ${outliers}個の図形があります` +
-        (details.length ? `：${details.join('、')}` : '') +
-        (outliers > details.length ? ' ほか' : '') +
-        '。全体表示では、これらを外して図面本体に合わせています'
-    );
-  }
+  // 【ここに「図面から遠く離れた場所に◯個の図形があります」を出していた。やめた】
+  //
+  // 中身は正しかったが、ユーザーにとっては**使い道が無く、混乱させただけ**だった
+  // （2026-09-03 ユーザーからの指摘。開発ルール25章）。
+  //
+  //   - 図面は欠けていない。表示のしかたの話でしかない
+  //   - CADの画面と見比べても、そこには何も見えない（消し忘れの文字など）
+  //   - 読んでも、現場の人にできることが何も無い
+  //
+  // 図面本体に合わせて表示する**動作はそのまま**。案内だけをやめた。
+  // はぐれ図形の中身は drawing.outlierList に残してあるので、不具合調べには使える。
+  //
+  // 案内に出すのは「現場の判断に影響すること」だけ（開発ルール25.3）。
 
   if (messages.length === 0) {
     unsupportedBanner.hidden = true;
@@ -337,6 +336,7 @@ const fileOpener = setupFileOpen({
   onLoadSuccess: (drawing, name, buffer) => {
     loadingOverlay.hidden = true;
     currentDrawing = drawing;
+    currentName = name || null;
 
     // この図面を覚えておく（開発ルール20章）。
     // アプリを更新するたびにファイルアプリから開き直させないため。
@@ -371,6 +371,57 @@ const fileOpener = setupFileOpen({
 // ------------------------------------------------------------
 const ZOOM_STEP = 1.25;
 
+// ------------------------------------------------------------
+// 覚えている図面から選ぶ画面（開発ルール24章）
+//
+// ファイルアプリを経由せずに、アプリの中で図面を切り替えられるようにする。
+// 現場で何枚かの図面を行き来するため。
+// ------------------------------------------------------------
+const drawingList = createDrawingList({
+  onOpen: (name) => {
+    // 一覧で選ばれた図面を開き直す。
+    // 覚えているのは元のファイルのバイト列なので、いつもと同じ経路で読み込む（20.2）。
+    openRememberedDrawing(name);
+  },
+  onDelete: (name) => forgetDrawing(name),
+});
+
+/**
+ * 覚えている図面を、名前を指定して開く。
+ * @param {string} name
+ */
+async function openRememberedDrawing(name) {
+  let saved = null;
+  try {
+    saved = await loadDrawing(name);
+  } catch (err) {
+    console.warn('[DXFビューア] 覚えている図面を取り出せませんでした。', err);
+  }
+  if (!saved || !saved.buffer || saved.buffer.byteLength === 0) {
+    showError(`「${name}」を取り出せませんでした。もう一度ファイルから開いてください。`);
+    return;
+  }
+  fileOpener.openBuffer(saved.name, saved.buffer);
+}
+
+
+/** 「図面を選ぶ」が押されたとき。覚えている図面の一覧を出す。 */
+async function showDrawingList() {
+  let items = [];
+  try {
+    items = await listDrawings();
+  } catch (err) {
+    console.warn('[DXFビューア] 覚えている図面の一覧を取り出せませんでした。', err);
+  }
+
+  if (!items || items.length === 0) {
+    // 覚えていないときは、空の一覧を出さずに何をすればよいか伝える（開発ルール24.5）
+    showError('まだ図面を覚えていません。「図面を開く」からファイルを選んでください。');
+    return;
+  }
+  drawingList.show(items, currentName);
+}
+
 attachToolbar(toolbarEl, {
   onOpen: () => {
     if (!viewportMod || !renderMod) {
@@ -378,6 +429,13 @@ attachToolbar(toolbarEl, {
       return;
     }
     fileOpener.open();
+  },
+  onRecent: () => {
+    if (!viewportMod || !renderMod) {
+      showError('図面を表示する部品がまだ準備できていません。しばらくしてからもう一度お試しください。');
+      return;
+    }
+    showDrawingList();
   },
   onFit: () => {
     const vp = ensureViewport();

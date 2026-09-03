@@ -1,0 +1,220 @@
+/* drawing-list.css — 「覚えている図面から選ぶ」画面の見た目だけ（開発ルール24章）
+ *
+ * ui.css と同じ雰囲気（白基調・角丸・影）に揃える。
+ * クラス名はすべて dl- で始めて、他の部品とぶつからないようにする。
+ *
+ * 【表示・非表示について】
+ * ui.css には [hidden]{display:none!important} がある（JSで隠したはずが隠れない事故対策）。
+ * この部品は素直にその仕組みに乗る（自前で display:none を制御しない）。
+ * 理由：ここだけ別ルールにすると、直した本人以外が忘れて同じ事故を起こしやすいため。
+ */
+
+.dl-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50; /* 版番号(20)・お知らせ(30)より前、更新案内(40)より前。図面選びは最優先の操作 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.dl-box {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  /* 箱の高さそのものは画面に収まる範囲に収め、中の一覧だけをスクロールさせる。
+   * 画面全体がスクロールしてはいけない（開発ルール指示）ための土台。 */
+  max-height: min(640px, 100%);
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.dl-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  padding: 16px 12px 16px 20px;
+  border-bottom: 1px solid #e6e6e6;
+}
+
+.dl-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: #111111;
+}
+
+/* 指で押しやすい大きさを確保する（開発ルール11章：1辺44px以上） */
+.dl-close {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 10px;
+  background: #f4f4f4;
+  color: #333333;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.dl-close:active {
+  background: #dcebff;
+}
+
+.dl-close-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.dl-close-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.dl-body {
+  flex: 1 1 auto;
+  min-height: 0; /* flex子要素の中だけスクロールさせるためのおまじない */
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.dl-empty {
+  margin: 0;
+  padding: 40px 20px;
+  text-align: center;
+  color: #666666;
+  font-size: 15px;
+}
+
+.dl-items {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+}
+
+.dl-item {
+  display: flex;
+  align-items: stretch;
+  /* 開くボタンと消すボタンの間を十分に離す（現場での誤操作対策）。 */
+  gap: 14px;
+  padding: 6px 4px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.dl-item:last-child {
+  border-bottom: none;
+}
+
+.dl-item-current {
+  background: #eef6ff;
+  border-radius: 10px;
+}
+
+/* 行そのもの（開くボタン）。指で押しやすい高さを確保する。 */
+.dl-open {
+  flex: 1 1 auto;
+  min-width: 0; /* 中の文字を折り返す・省略するために必要 */
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.dl-open:active {
+  background: #eef2f7;
+}
+
+.dl-name {
+  width: 100%;
+  color: #111111;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  /* 長いファイル名は折り返して全部読めるようにする（途中で切らない）。 */
+  overflow-wrap: anywhere;
+}
+
+.dl-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #555555;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.dl-current-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #0b4da2;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+/* 消すボタン。開くボタンから十分離れた場所（行の右端）に、独立した大きさで置く。 */
+.dl-delete {
+  flex: none;
+  align-self: center;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 10px;
+  background: #fdecea;
+  color: #a33025;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.dl-delete:active {
+  background: #f7d3ce;
+}
+
+.dl-delete-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.dl-delete-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* ------------------------------------------------------------
+ * 横向き（landscape）で高さが狭いときも、箱が画面からはみ出ないようにする。
+ * ---------------------------------------------------------- */
+@media (orientation: landscape) and (max-height: 480px) {
+  .dl-box {
+    max-height: calc(100% - 8px);
+  }
+  .dl-header {
+    padding: 10px 12px 10px 16px;
+  }
+}

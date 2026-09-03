@@ -189,21 +189,36 @@ test('新しい順で並ぶ（listDrawings）', async () => {
   }
 });
 
-test('6件目を覚えると、いちばん古いものが消えて5件になる', async () => {
+test('11件目を覚えると、いちばん古いものが消えて10件になる', async () => {
+  // 覚えておく数は10件（開発ルール20.4。2026-09-03 にユーザー要望で5件→10件）
   globalThis.indexedDB = makeFakeIndexedDB();
 
-  for (let i = 1; i <= 6; i++) {
+  for (let i = 1; i <= 11; i++) {
     // eslint-disable-next-line no-await-in-loop
     await saveDrawing(`図面${i}.dxf`, bufferOf(`内容${i}`));
   }
 
   const list = await listDrawings();
-  assert.equal(list.length, 5, '5件になっていない');
+  assert.equal(list.length, 10, '10件になっていない');
   assert.ok(
     !list.some((d) => d.name === '図面1.dxf'),
     'いちばん古い「図面1.dxf」が消えていない'
   );
-  assert.ok(list.some((d) => d.name === '図面6.dxf'), '最新の「図面6.dxf」が残っていない');
+  assert.ok(list.some((d) => d.name === '図面11.dxf'), '最新の「図面11.dxf」が残っていない');
+});
+
+test('10件までは、1件も消えずに全部残る', async () => {
+  // ここが効いていないと、まだ余裕があるのに古い図面が消えてしまう
+  globalThis.indexedDB = makeFakeIndexedDB();
+
+  for (let i = 1; i <= 10; i++) {
+    // eslint-disable-next-line no-await-in-loop
+    await saveDrawing(`図面${i}.dxf`, bufferOf(`内容${i}`));
+  }
+
+  const list = await listDrawings();
+  assert.equal(list.length, 10, '10件そろっていない');
+  assert.ok(list.some((d) => d.name === '図面1.dxf'), '1件目が勝手に消えている');
 });
 
 test('同じ名前を覚え直すと、増えずに置き換わる', async () => {

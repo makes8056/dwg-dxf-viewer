@@ -235,6 +235,16 @@ function drawEllipse(ctx, e, vp) {
   return true;
 }
 
+/**
+ * 図形データの縦位置の名前を、Canvasが受け付ける名前に直す。
+ * Canvasが知らない名前を渡すと黙って無視されるので、ここで必ず通す。
+ */
+function toCanvasBaseline(value) {
+  const ok = ['top', 'hanging', 'middle', 'alphabetic', 'ideographic', 'bottom'];
+  if (ok.includes(value)) return value;
+  return 'alphabetic'; // 'baseline' など、Canvasに無い名前はここに落ちる
+}
+
 function drawText(ctx, e, vp) {
   const fontPx = (e.height || 0) * vp.scale;
   // 小さすぎて読めない文字は描かない（読めない文字で画面が真っ黒になるのを防ぐ）
@@ -250,7 +260,10 @@ function drawText(ctx, e, vp) {
   // 寸法の数字は「中央ぞろえ」で置かれるので、ここを左端に決め打ちすると
   // 数字が寸法線からずれて見える。
   ctx.textAlign = e.hAlign || 'left';
-  ctx.textBaseline = e.vAlign || 'alphabetic';
+  // Canvasが受け付けない名前を渡すと、ブラウザは**黙って無視**する。
+  // 無視されると直前の文字の縦位置が残り、文字がずれて出る（実際に起きた）。
+  // ここで必ず正しい名前に直してから渡す。
+  ctx.textBaseline = toCanvasBaseline(e.vAlign);
   ctx.translate(sx, sy);
   // 回転も、円弧と同じ理由で符号を反転させる（図面の反時計回り→画面では逆向き）
   ctx.rotate(-((rotationDeg * Math.PI) / 180));

@@ -600,7 +600,10 @@ function emitText(drawing, ctx, layer, color, x, y, height, rotation, text, alig
     // 文字を書き出す点の、どこに文字を置くか（左端／中央／右端・上／中／下）。
     // 寸法の数字は「中央ぞろえ」で置かれるので、ここを無視すると線からずれる。
     hAlign: (align && align.h) || 'left',
-    vAlign: (align && align.v) || 'baseline',
+    // 'baseline' ではなく 'alphabetic'。
+    // **'baseline' はCanvasに存在しない値**で、指定してもブラウザに無視される。
+    // 無視されると、直前に描いた文字の縦位置がそのまま残り、文字がずれて出る。
+    vAlign: (align && align.v) || 'alphabetic',
   });
 }
 

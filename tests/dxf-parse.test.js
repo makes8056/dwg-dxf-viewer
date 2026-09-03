@@ -574,3 +574,17 @@ test('はぐれ図形が「何か」まで分かる（CADで探せるように�
   assert.equal(d.outlierList[0].layer, 'メモ', 'レイヤー名が記録されていない');
   assert.ok(d.outlierList[0].x > 400000, '場所が記録されていない');
 });
+
+test('DXFから作る文字の縦位置に、Canvasが知らない名前を使わない', () => {
+  // 'baseline' はCanvasに存在しない名前。渡すとブラウザに無視され、文字がずれる。
+  const ok = ['top', 'hanging', 'middle', 'alphabetic', 'ideographic', 'bottom'];
+  for (const file of ['shapes.dxf', 'visibility.dxf', 'dimension.dxf', 'utf8-mislabeled.dxf']) {
+    const d = load(file);
+    for (const t of only(d, 'text')) {
+      assert.ok(
+        ok.includes(t.vAlign),
+        `${file} の文字「${t.text}」の縦位置が「${t.vAlign}」になっている（Canvasが知らない名前）`
+      );
+    }
+  }
+});

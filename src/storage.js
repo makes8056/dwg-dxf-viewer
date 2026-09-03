@@ -42,7 +42,7 @@
 const DB_NAME = 'dxf-viewer';
 const DB_VERSION = 1;
 const STORE_NAME = 'drawings';
-const MAX_DRAWINGS = 5; // 開発ルール20.4：最大5件まで。6件目は最古を消す
+const MAX_DRAWINGS = 10; // 開発ルール20.4：最大10件まで。11件目は最古を消す（2026-09-03 5件→10件）
 
 /** 日本語でそっと警告を残す。ここで失敗しても呼び出し側を止めない。 */
 function warn(message, error) {
