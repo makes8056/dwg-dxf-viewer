@@ -1,7 +1,12 @@
 // toolbar.js — 画面のボタン類（開発ルール2.2：1ファイル1役割）
 //
-// このアプリで用意するボタンは、この6つだけ（むやみに増やさない）。
-//   図面を開く／図面を選ぶ／全体表示／拡大／縮小／印刷する範囲
+// このアプリで用意するボタンは、この4つだけ（むやみに増やさない）。
+//   図面を開く／図面を選ぶ／全体表示／印刷する範囲
+//
+// 【「拡大」「縮小」ボタンは外した（v0.2.4／ユーザー判断）】
+//   iPadでは2本指のつまむ操作（ピンチ）で拡大縮小できるので、ボタンは要らない。
+//   ボタンが減ったぶん、残ったボタンを大きく・押し間違えにくくできる。
+//   拡大縮小そのものは src/ui/gestures.js が受け持つ（無くなっていない）。
 //
 // このファイルは「ボタンを画面に出して、押されたことを伝える」だけをする。
 // 図面を動かしたり読み込んだりする処理は一切ここに書かない（開発ルール2.3・2.4）。
@@ -17,19 +22,6 @@ const ICONS = {
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M20 9V5.5A1.5 1.5 0 0 0 18.5 4H15M4 15v3.5A1.5 1.5 0 0 0 5.5 20H9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15"
             fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-    </svg>`,
-  zoomIn: `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="10.5" cy="10.5" r="6.2" fill="none" stroke="currentColor" stroke-width="1.8" />
-      <line x1="15.3" y1="15.3" x2="20.5" y2="20.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-      <line x1="7.6" y1="10.5" x2="13.4" y2="10.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-      <line x1="10.5" y1="7.6" x2="10.5" y2="13.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-    </svg>`,
-  zoomOut: `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="10.5" cy="10.5" r="6.2" fill="none" stroke="currentColor" stroke-width="1.8" />
-      <line x1="15.3" y1="15.3" x2="20.5" y2="20.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-      <line x1="7.6" y1="10.5" x2="13.4" y2="10.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
     </svg>`,
   recent: `
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -55,8 +47,6 @@ const BUTTONS = [
   // 覚えている図面から選ぶ。「図面を開く」の隣に置く（役割が近いので並べる）
   { action: 'recent', icon: ICONS.recent, label: '図面を選ぶ' },
   { action: 'fit', icon: ICONS.fit, label: '全体表示' },
-  { action: 'zoom-in', icon: ICONS.zoomIn, label: '拡大' },
-  { action: 'zoom-out', icon: ICONS.zoomOut, label: '縮小' },
   // このアプリの一番の目的（開発ルール26章）。右端に置いて押し間違えを減らす。
   { action: 'print', icon: ICONS.print, label: '印刷する範囲' },
 ];
@@ -68,8 +58,6 @@ const BUTTONS = [
  *   onOpen()    … 「図面を開く」が押された
  *   onRecent()  … 「図面を選ぶ」（覚えている図面の一覧）が押された
  *   onFit()     … 「全体表示」が押された
- *   onZoomIn()  … 「拡大」が押された
- *   onZoomOut() … 「縮小」が押された
  *   onPrint()   … 「印刷する範囲」が押された（範囲を囲むモードに入る）
  * @returns {() => void} 後片付け用。呼ぶとボタンの反応をやめる。
  */
@@ -88,8 +76,6 @@ export function attachToolbar(container, handlers = {}) {
     if (action === 'open') handlers.onOpen && handlers.onOpen();
     else if (action === 'recent') handlers.onRecent && handlers.onRecent();
     else if (action === 'fit') handlers.onFit && handlers.onFit();
-    else if (action === 'zoom-in') handlers.onZoomIn && handlers.onZoomIn();
-    else if (action === 'zoom-out') handlers.onZoomOut && handlers.onZoomOut();
     else if (action === 'print') handlers.onPrint && handlers.onPrint();
   };
 

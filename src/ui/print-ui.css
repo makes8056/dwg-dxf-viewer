@@ -58,6 +58,46 @@
   pointer-events: none;
 }
 
+/* ------------------------------------------------------------
+ * つまみ（丸）。囲んだあとに大きさを直すためのもの（v0.2.4／開発ルール30章）
+ *
+ * .pr-select は pointer-events:none（指を板に通す）なので、
+ * つまみだけ pointer-events:auto に戻して、指を受け取れるようにする。
+ * ---------------------------------------------------------- */
+.pr-handle {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 3px solid #0b4da2;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+/* 【重要】見た目は26pxだが、**指の当たり判定は44px**にする（開発ルール11章）。
+ * 手袋をした指でもつまめるように、透明な広い当たり判定を丸のまわりに付ける。
+ * print-ui.js の HANDLE_HIT_PX と同じ値にすること。 */
+.pr-handle::before {
+  content: '';
+  position: absolute;
+  top: -12px;
+  right: -12px;
+  bottom: -12px;
+  left: -12px;
+}
+
+.pr-handle-nw { left: 0; top: 0; }
+.pr-handle-n { left: 50%; top: 0; }
+.pr-handle-ne { left: 100%; top: 0; }
+.pr-handle-w { left: 0; top: 50%; }
+.pr-handle-e { left: 100%; top: 50%; }
+.pr-handle-sw { left: 0; top: 100%; }
+.pr-handle-s { left: 50%; top: 100%; }
+.pr-handle-se { left: 100%; top: 100%; }
+
 /* 四角の大きさ（横◯◯×縦◯◯）。画面のピクセル数でよい（開発ルール26.2） */
 .pr-dim {
   position: absolute;
@@ -88,6 +128,21 @@
   background: #ffffff;
   border-radius: 16px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+/* 四角が画面の下のほうにあると、この箱が下のつまみを隠して**調整できなくなる**。
+ * そのときは print-ui.js が pr-actions-top を付けて、箱を上へ移す。 */
+.pr-actions.pr-actions-top {
+  bottom: auto;
+  top: max(16px, env(safe-area-inset-top));
+}
+
+/* 箱の中の短い案内。上の .pr-guide はボタンが出ている間は消すので、こちらに出す。 */
+.pr-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #444444;
 }
 
 .pr-actions-row {
@@ -148,6 +203,10 @@
   .pr-actions {
     padding: 10px;
     gap: 8px;
+  }
+  /* 高さが足りないときは案内文を諦めて、ボタンの大きさを優先する（開発ルール11章） */
+  .pr-hint {
+    display: none;
   }
   .pr-btn-print {
     min-height: 48px;

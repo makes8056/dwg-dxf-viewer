@@ -403,10 +403,9 @@ const fileOpener = setupFileOpen({
 });
 
 // ------------------------------------------------------------
-// ツールバー（図面を開く／全体表示／拡大／縮小）
+// ツールバー（図面を開く／図面を選ぶ／全体表示／印刷する範囲）
+// 「拡大」「縮小」ボタンは v0.2.4 で外した。2本指のつまむ操作でできるため。
 // ------------------------------------------------------------
-const ZOOM_STEP = 1.25;
-
 // ------------------------------------------------------------
 // 覚えている図面から選ぶ画面（開発ルール24章）
 //
@@ -643,20 +642,6 @@ attachToolbar(toolbarEl, {
     if (!vp || !fitTo) return;
     viewportMod.fitToBounds(vp, fitTo);
     fittedWidth = vp.width;
-    scheduleRedraw();
-  },
-  onZoomIn: () => {
-    const vp = ensureViewport();
-    if (!vp) return;
-    const rect = canvas.getBoundingClientRect();
-    viewportMod.zoomAt(vp, rect.width / 2, rect.height / 2, ZOOM_STEP);
-    scheduleRedraw();
-  },
-  onZoomOut: () => {
-    const vp = ensureViewport();
-    if (!vp) return;
-    const rect = canvas.getBoundingClientRect();
-    viewportMod.zoomAt(vp, rect.width / 2, rect.height / 2, 1 / ZOOM_STEP);
     scheduleRedraw();
   },
 });
