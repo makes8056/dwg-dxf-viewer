@@ -8,7 +8,9 @@
 // 呼び出す側が onUpdateReady で渡された applyUpdate() を、
 // ユーザーが「更新」ボタンなどを押したときにだけ呼ぶことで初めて切り替わる（開発ルール5.2）。
 
-const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 30分に1回（現場で開きっぱなしのことがあるため）
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000; // 開きっぱなしのときに見に行く間隔（30分）
+// 表に戻ってくるたびに見に行くが、短い間に何度も繰り返さないための最短間隔（30秒）
+const MIN_CHECK_GAP_MS = 30 * 1000;
 
 /**
  * Service Worker を登録し、新しい版が来たら知らせる。
@@ -77,9 +79,48 @@ export async function startUpdateCheck(handlers = {}) {
     });
   });
 
-  // アプリを開いている間も、ときどき更新を見に行く（現場で開きっぱなしのことがあるため）。
-  // registration.update() はネットワークが無ければ静かに失敗するだけなので、オフラインでも問題ない。
-  setInterval(() => {
+  // ------------------------------------------------------------
+  // いつ更新を見に行くか
+  //
+  // 【iPadで分かったこと】
+  // アプリを裏に回した（他のアプリに切り替えた）状態では、
+  // **iPadが時計を止めてしまうため、下の「30分ごと」が動きません。**
+  // そのため、裏から戻ってきても新しい版に気づけませんでした。
+  // 実際に「バックグラウンドで待機している間に更新が来ても気づかない」と報告がありました。
+  //
+  // そこで「**表に戻ってきた瞬間**」にも見に行きます。ここが実質いちばん効きます。
+  // ------------------------------------------------------------
+
+  let lastCheckedAt = Date.now();
+
+  /**
+   * 更新を見に行く。
+   * ネットワークが無ければ静かに失敗するだけなので、オフラインでも問題ない。
+   * @param {boolean} force 前回からの間隔を気にせず必ず見に行くか
+   */
+  function checkForUpdate(force = false) {
+    const now = Date.now();
+    // 短い間に何度も見に行かないようにする（画面の切り替えを繰り返したときの無駄を防ぐ）
+    if (!force && now - lastCheckedAt < MIN_CHECK_GAP_MS) return;
+    lastCheckedAt = now;
     registration.update().catch(() => {});
-  }, UPDATE_CHECK_INTERVAL_MS);
+  }
+
+  // 1. 表に戻ってきたとき（他のアプリから切り替えて戻ってきた／画面を点けた）
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) checkForUpdate();
+  });
+
+  // 2. ウィンドウが選ばれたとき（パソコンで別のウィンドウから戻ってきた場合）
+  window.addEventListener('focus', () => checkForUpdate());
+
+  // 3. 「戻る」で開き直されたとき。
+  //    ブラウザはページをそのまま冷凍保存して復活させることがある（bfcache）。
+  //    このとき visibilitychange が起きないことがあるので、別に見張る。
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) checkForUpdate(true);
+  });
+
+  // 4. 開きっぱなしのときのために、ときどき見に行く（現場で開いたままのことがある）
+  setInterval(() => checkForUpdate(true), UPDATE_CHECK_INTERVAL_MS);
 }

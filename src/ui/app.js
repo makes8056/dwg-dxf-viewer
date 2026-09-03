@@ -259,9 +259,21 @@ function showUnsupported(drawing) {
   // 何も言わないと「図面の一部が無い」と誤解される。
   const outliers = drawing && drawing.outliers;
   if (outliers) {
+    // 【ユーザーからの指摘】「3個あります」とだけ出していたら、
+    // CADで探しても見つけられなかった。**何がどこにあるかまで書く。**
+    const kindName = { text: '文字', line: '線', polyline: '折れ線', arc: '円弧', circle: '円', ellipse: '楕円' };
+    const details = (drawing.outlierList || []).slice(0, 3).map((o) => {
+      const what = kindName[o.type] || o.type;
+      const label = o.text ? `「${o.text}」` : '';
+      const where = `レイヤー「${o.layer}」・座標 ${o.x}, ${o.y}`;
+      return `${what}${label}（${where}）`;
+    });
+
     messages.push(
-      `図面から遠く離れた場所に ${outliers}個の図形があります。` +
-        `全体表示では、図面本体だけに合わせています（指で縮小すると見つかります）`
+      `図面から遠く離れた場所に ${outliers}個の図形があります` +
+        (details.length ? `：${details.join('、')}` : '') +
+        (outliers > details.length ? ' ほか' : '') +
+        '。全体表示では、これらを外して図面本体に合わせています'
     );
   }
 

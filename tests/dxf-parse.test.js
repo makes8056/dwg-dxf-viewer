@@ -503,3 +503,74 @@ test('印刷レイアウトののぞき窓（VIEWPORT）は「表示できませ
   const d = load('ellipse-viewport.dxf');
   assert.equal(d.unsupported.count, 0, `余計なものを数えている: ${JSON.stringify(d.unsupported.kinds)}`);
 });
+
+// ============================================================
+// 中身が空っぽの文字（実物の図面で判明）
+//
+// お客様の参考図.dxf には、書式の指定だけが入っていて肝心の文字が無いMTEXTがあった。
+// CADの画面には何も出ない。ところがこのアプリは「文字がそこにある」として扱ったため、
+// **図面の遠くに見えない文字があることになり、見えないものを報告していた。**
+// お客様がCADで探しても見つからなくて当然だった。
+// ============================================================
+
+test('中身が空っぽの文字は、図形として作らない', () => {
+  const dxf = [
+    '0', 'SECTION', '2', 'HEADER', '9', '$ACADVER', '1', 'AC1032', '0', 'ENDSEC',
+    '0', 'SECTION', '2', 'ENTITIES',
+    // 書式の指定だけで、文字が無いMTEXT（実物にあったのと同じ形）
+    '0', 'MTEXT', '8', '0', '62', '7',
+    '10', '99999.0', '20', '99999.0', '40', '150.0', '71', '1', '1', '\\A1;',
+    // ふつうの文字
+    '0', 'TEXT', '8', '0', '62', '7',
+    '10', '0.0', '20', '0.0', '40', '5.0', '1', '配管',
+    // 空白だけの文字も、見えないので作らない
+    '0', 'TEXT', '8', '0', '62', '7',
+    '10', '50.0', '20', '0.0', '40', '5.0', '1', '   ',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  const texts = only(d, 'text');
+  assert.equal(texts.length, 1, `見えない文字まで作っている: ${JSON.stringify(texts.map((t) => t.text))}`);
+  assert.equal(texts[0].text, '配管');
+});
+
+test('見えない文字が、図面の範囲を広げない', () => {
+  // ここが効かないと、遠くの見えない文字に引っぱられて図面が小さく表示される
+  const dxf = [
+    '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'LINE', '8', '0', '62', '7', '10', '0.0', '20', '0.0', '11', '100.0', '21', '0.0',
+    '0', 'MTEXT', '8', '0', '62', '7',
+    '10', '99999.0', '20', '99999.0', '40', '150.0', '71', '1', '1', '\\A1;',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  assert.ok(d.bounds.maxX <= 100, `見えない文字が範囲を広げている: ${JSON.stringify(d.bounds)}`);
+  assert.equal(d.outliers, 0, '見えない文字をはぐれ図形として数えている');
+});
+
+test('はぐれ図形が「何か」まで分かる（CADで探せるように）', () => {
+  // 「3個あります」だけだと、CADで探しても見つけられない（実際に見つけられなかった）
+  const entities = [];
+  for (let i = 0; i < 100; i++) {
+    entities.push({ type: 'line', layer: '0', color: '#000', x1: i, y1: 0, x2: i, y2: 100 });
+  }
+  const dxf = [
+    '0', 'SECTION', '2', 'ENTITIES',
+    ...entities.flatMap((e) => ['0', 'LINE', '8', '0', '62', '7',
+      '10', String(e.x1), '20', String(e.y1), '11', String(e.x2), '21', String(e.y2)]),
+    '0', 'TEXT', '8', 'メモ', '62', '7',
+    '10', '500000.0', '20', '500000.0', '40', '10.0', '1', 'outlook',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  assert.equal(d.outliers, 1);
+  assert.ok(Array.isArray(d.outlierList), 'はぐれ図形の中身が記録されていない');
+  assert.equal(d.outlierList.length, 1);
+  assert.equal(d.outlierList[0].type, 'text');
+  assert.equal(d.outlierList[0].text, 'outlook', '文字の中身が記録されていない');
+  assert.equal(d.outlierList[0].layer, 'メモ', 'レイヤー名が記録されていない');
+  assert.ok(d.outlierList[0].x > 400000, '場所が記録されていない');
+});

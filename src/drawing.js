@@ -183,6 +183,7 @@ export function finishDrawing(drawing) {
   const content = computeContentBounds(drawing.entities);
   drawing.contentBounds = content.bounds;
   drawing.outliers = content.outliers;
+  drawing.outlierList = content.outlierList || [];
   return drawing;
 }
 
@@ -216,11 +217,12 @@ export function entityBounds(e) {
  */
 export function computeContentBounds(entities) {
   const boxes = [];
+  const withBox = []; // boxes と同じ並びで、元の図形も持っておく
   for (const e of entities) {
     const b = computeBounds([e]);
-    if (b) boxes.push(b);
+    if (b) { boxes.push(b); withBox.push(e); }
   }
-  if (boxes.length === 0) return { bounds: null, outliers: 0 };
+  if (boxes.length === 0) return { bounds: null, outliers: 0, outlierList: [] };
 
   const centers = boxes.map((b) => [(b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2]);
   const mid = (arr) => {
@@ -240,11 +242,25 @@ export function computeContentBounds(entities) {
 
   const kept = [];
   let outliers = 0;
+  // どんな図形がはぐれているかも覚えておく。
+  // 「3個あります」だけだと、CADで探しても見つけられない（実際に探せなかった）。
+  const outlierList = [];
   for (let i = 0; i < boxes.length; i++) {
-    if (dists[i] <= limit) kept.push(boxes[i]);
-    else outliers++;
+    if (dists[i] <= limit) {
+      kept.push(boxes[i]);
+    } else {
+      outliers++;
+      const e = withBox[i];
+      outlierList.push({
+        type: e.type,
+        layer: e.layer,
+        text: e.type === 'text' ? String(e.text || '') : '',
+        x: Math.round((boxes[i].minX + boxes[i].maxX) / 2),
+        y: Math.round((boxes[i].minY + boxes[i].maxY) / 2),
+      });
+    }
   }
-  if (kept.length === 0) return { bounds: computeBounds(entities), outliers: 0 };
+  if (kept.length === 0) return { bounds: computeBounds(entities), outliers: 0, outlierList: [] };
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const b of kept) {
@@ -253,7 +269,7 @@ export function computeContentBounds(entities) {
     if (b.maxX > maxX) maxX = b.maxX;
     if (b.maxY > maxY) maxY = b.maxY;
   }
-  return { bounds: { minX, minY, maxX, maxY }, outliers };
+  return { bounds: { minX, minY, maxX, maxY }, outliers, outlierList };
 }
 
 /**

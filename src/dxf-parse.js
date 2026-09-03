@@ -574,6 +574,19 @@ function emitPolyline(drawing, ctx, layer, color, points, closed) {
 }
 
 function emitText(drawing, ctx, layer, color, x, y, height, rotation, text, align) {
+  // 【実物の図面で分かったこと】中身が空っぽの文字は、CADでも何も見えません。
+  //
+  // お客様の参考図.dxf には、書式の指定（`\A1;` など）だけが入っていて
+  // 肝心の文字が無いMTEXTがありました。CADの画面には何も出ません。
+  // ところがこのアプリは「文字がそこにある」として扱っていたため、
+  // 図面の遠くに見えない文字があることになり、
+  // **「図面から遠く離れた場所に図形があります」と、見えないものを報告していました。**
+  // お客様がCADで探しても見つからなくて当然でした。
+  //
+  // 見えないものは、最初から作りません。
+  const shown = String(text ?? '').trim();
+  if (shown === '') return;
+
   const [X, Y] = applyMatrix(ctx.transform, x, y);
   drawing.entities.push({
     type: 'text',
