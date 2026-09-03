@@ -13,7 +13,8 @@
  * 「図面を開く」の仕組みを用意する。
  * @param {object} handlers
  *   onLoadStart()                … 読み込みを始めた（「読み込み中…」を出す）
- *   onLoadSuccess(drawing, name) … 読み込みに成功した（drawing は src/drawing.js の形）
+ *   onLoadSuccess(drawing, name, buffer) … 読み込みに成功した
+ *       drawing は src/drawing.js の形。buffer は元のファイルのバイト列（覚えておく用）
  *   onLoadError(message)         … 失敗した。message は日本語の理由
  * @returns {{ open: () => void }} open() を呼ぶと、ファイルを選ぶ画面が開く
  */
@@ -59,6 +60,15 @@ export function setupFileOpen(handlers = {}) {
     open() {
       input.click();
     },
+    /**
+     * ファイルを選ばずに、すでに手元にあるバイト列から図面を開く。
+     * 覚えておいた図面を起動時に開き直すために使う（開発ルール20章）。
+     * @param {string} name ファイル名
+     * @param {ArrayBuffer} buffer ファイルの中身
+     */
+    openBuffer(name, buffer) {
+      return openDrawingBuffer(name, buffer, handlers);
+    },
   };
 }
 
@@ -69,17 +79,40 @@ export function setupFileOpen(handlers = {}) {
  */
 async function handleFile(file, handlers) {
   const name = file.name || 'ファイル';
-  const dot = name.lastIndexOf('.');
-  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : '';
 
   handlers.onLoadStart && handlers.onLoadStart();
 
-  // 中身の先頭を見て、本当は何のファイルなのかを確かめる。
-  // 拡張子だけで決めると、名前が違うだけで開けない図面が出てしまう。
-  let head;
   let buffer;
   try {
     buffer = await file.arrayBuffer();
+  } catch (err) {
+    handlers.onLoadError && handlers.onLoadError(
+      `「${name}」を読み込めませんでした。もう一度お試しください。`
+    );
+    return;
+  }
+  return openDrawingBuffer(name, buffer, handlers, { alreadyStarted: true });
+}
+
+/**
+ * バイト列から図面を開く。ファイルから選んだ場合も、覚えていた図面を開き直す場合も、
+ * **必ずここを通す**。読み込みの決まり（種類の判定・エラーの出し方）を1か所にまとめるため。
+ *
+ * @param {string} name ファイル名
+ * @param {ArrayBuffer} buffer ファイルの中身
+ * @param {object} handlers setupFileOpen() に渡したものと同じ
+ * @param {object} [options] { alreadyStarted } 「読み込み中…」をすでに出してあるか
+ */
+async function openDrawingBuffer(name, buffer, handlers, options = {}) {
+  const dot = name.lastIndexOf('.');
+  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : '';
+
+  if (!options.alreadyStarted) {
+    handlers.onLoadStart && handlers.onLoadStart();
+  }
+
+  let head;
+  try {
     head = new TextDecoder('utf-8').decode(new Uint8Array(buffer, 0, Math.min(4096, buffer.byteLength)));
   } catch (err) {
     handlers.onLoadError && handlers.onLoadError(
@@ -147,7 +180,8 @@ async function handleFile(file, handlers) {
       return;
     }
 
-    handlers.onLoadSuccess && handlers.onLoadSuccess(drawing, name);
+    // buffer も渡す。呼び出す側（app.js）が、この図面を覚えておくために使う（開発ルール20章）。
+    handlers.onLoadSuccess && handlers.onLoadSuccess(drawing, name, buffer);
   } catch (err) {
     const detail = err && err.message ? err.message : String(err);
     handlers.onLoadError && handlers.onLoadError(

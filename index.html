@@ -10,6 +10,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>DWG・DXFビューア</title>
 <link rel="stylesheet" href="./src/ui/ui.css">
+
+<!-- ホーム画面に追加してアプリのように使うための設定（開発ルール5章・11章）。
+     start_url は manifest.json 側で "./" にしてある。
+     ここを "./index.html" にすると、iPadのホーム画面から起動したときだけ
+     アプリが開かなくなる（04で起きた本番事故。開発ルール5.3）。 -->
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#ffffff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="図面ビューア">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
 </head>
 <body>
 
@@ -51,6 +62,14 @@
   <div id="browser-hint" class="hint" hidden>
     <span class="hint-text">電波の無い場所でも使うなら、Safariで開いてホーム画面に追加してください。</span>
     <button type="button" id="browser-hint-close" class="hint-close" aria-label="この案内を閉じる">×</button>
+  </div>
+
+  <!-- 新しい版が届いたときの案内（開発ルール5.2）。
+       黙って切り替えず、押されたときだけ切り替える。作業中の図面を飛ばさないため。 -->
+  <div id="update-banner" class="update-banner" hidden>
+    <span id="update-text" class="update-text"></span>
+    <button type="button" id="update-apply" class="update-apply">更新する</button>
+    <button type="button" id="update-close" class="update-close" aria-label="あとにする">×</button>
   </div>
 
   <!-- 画面の入口はここ1つだけ（開発ルール9.4・2.1）。あとは import でつなぐ。 -->

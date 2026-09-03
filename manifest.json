@@ -1,0 +1,26 @@
+{
+  "name": "DWG・DXFビューア",
+  "short_name": "図面ビューア",
+  "description": "現場でDWG・DXF図面を開いて見るためのアプリ。図面は端末の中だけで処理し、どこへも送信しません。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "lang": "ja",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

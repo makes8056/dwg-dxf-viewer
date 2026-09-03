@@ -58,9 +58,19 @@ body {
 /* ------------------------------------------------------------
  * 版番号（右上）
  * ---------------------------------------------------------- */
+/* 版番号は「右下」に置く。
+ *
+ * 【なぜ右上ではないか】
+ * iPadの画面の右上には、電池の残量や電波の状態がiPad自身によって表示されます。
+ * ホーム画面から起動したとき、そこに版番号を出すと重なって読みにくくなります。
+ * ユーザーからの要望で右下へ移しました（2026-09-03）。
+ *
+ * --version-lift は、ボタンの列と重なりそうなときだけ
+ * src/ui/app.js が実測して入れる「持ち上げる高さ」です。
+ * 数字を決め打ちしないこと（04と同じ重なり事故を防ぐため。開発ルール7.4）。 */
 .version-badge {
   position: fixed;
-  top: max(10px, env(safe-area-inset-top));
+  bottom: calc(max(10px, env(safe-area-inset-bottom)) + var(--version-lift, 0px));
   right: max(10px, env(safe-area-inset-right));
   z-index: 20;
   padding: 4px 10px;
@@ -303,4 +313,58 @@ body {
   }
   /* .hint の位置はここで上書きしない。
    * 上書きするとボタンの実際の高さと合わなくなり、案内がボタンに重なる。 */
+}
+
+/* ------------------------------------------------------------
+ * 新しい版が届いたときの案内（画面の上）
+ *
+ * 黙って切り替えず、押されたときだけ切り替える（開発ルール5.2）。
+ * 現場で図面を見ている最中に、勝手に画面が変わらないようにするため。
+ * ---------------------------------------------------------- */
+.update-banner {
+  position: fixed;
+  top: max(10px, env(safe-area-inset-top));
+  left: max(10px, env(safe-area-inset-left));
+  right: max(10px, env(safe-area-inset-right));
+  z-index: 40; /* 他の案内より前に出す。更新は見逃してほしくない */
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #0b4da2;
+  color: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.update-text {
+  flex: 1 1 auto;
+}
+
+/* 指で押しやすい大きさを確保する（開発ルール11章） */
+.update-apply {
+  flex: 0 0 auto;
+  min-width: 96px;
+  min-height: 44px;
+  padding: 0 16px;
+  font-size: 15px;
+  font-weight: bold;
+  color: #0b4da2;
+  background: #ffffff;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.update-close {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 18px;
+  color: #ffffff;
+  background: transparent;
+  border: none;
+  cursor: pointer;
 }

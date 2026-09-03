@@ -12,6 +12,8 @@ import { APP_VERSION } from '../version.js';
 import { attachToolbar } from './toolbar.js';
 import { setupFileOpen } from './file-open.js';
 import { attachGestures } from './gestures.js';
+import { saveDrawing, loadLatestDrawing } from '../storage.js';
+import { startUpdateCheck } from '../update-check.js';
 
 // ------------------------------------------------------------
 // 画面の部品を取得
@@ -33,6 +35,11 @@ const errorClose = document.getElementById('error-close');
 const unsupportedBanner = document.getElementById('unsupported-banner');
 const unsupportedText = document.getElementById('unsupported-text');
 const unsupportedClose = document.getElementById('unsupported-close');
+
+const updateBanner = document.getElementById('update-banner');
+const updateText = document.getElementById('update-text');
+const updateApply = document.getElementById('update-apply');
+const updateClose = document.getElementById('update-close');
 
 const browserHint = document.getElementById('browser-hint');
 const browserHintClose = document.getElementById('browser-hint-close');
@@ -126,6 +133,64 @@ function updateToolbarHeightVar() {
   if (h > 0) {
     document.documentElement.style.setProperty('--toolbar-height', `${h}px`);
   }
+  updateVersionBadgePosition();
+}
+
+/**
+ * 版番号（右下）が、ボタンの列と重ならないようにする。
+ *
+ * 版番号は右下、ボタンは下の中央にあります。
+ * ふつうは離れていますが、画面が狭いとボタンの列が右まで伸びて**重なります。**
+ * 重なると版番号が読めなくなり、更新できたかどうか分からなくなります。
+ *
+ * ここでも数字を決め打ちせず、**実際に測って**判断します
+ * （04で「案内の帯がボタンに13ピクセル重なる」事故が起きたのと同じ理由。開発ルール7.4）。
+ */
+function updateVersionBadgePosition() {
+  const root = document.documentElement;
+  // まず持ち上げを0に戻してから測る（前回の持ち上げを二重に足さないため）
+  root.style.setProperty('--version-lift', '0px');
+
+  const badge = versionBadge.getBoundingClientRect();
+  const bar = toolbarEl.getBoundingClientRect();
+  if (badge.width === 0 || bar.width === 0) return;
+
+  const overlaps =
+    badge.right > bar.left &&
+    badge.left < bar.right &&
+    badge.bottom > bar.top &&
+    badge.top < bar.bottom;
+
+  if (overlaps) {
+    // ボタンの列の上へ、ちょうど8ピクセルすき間があくまで持ち上げる。
+    // 「ボタンの高さ＋8」のような当てずっぽうではなく、実際の位置から計算する。
+    const lift = Math.ceil(badge.bottom - bar.top + 8);
+    root.style.setProperty('--version-lift', `${lift}px`);
+  }
+}
+
+/**
+ * 画面の大きさや、ボタンの大きさが変わったら、置き場所を計算し直す。
+ *
+ * 画面の回転（resize）だけを見ていると取りこぼします。
+ * iPadでは、URLバーが出入りしたり、文字の大きさ設定が変わったりして、
+ * **resize が起きないのに配置だけ変わる**ことがあります。
+ * そこで、ボタンの列と画面そのものの大きさを直接見張ります。
+ */
+function watchLayoutChanges() {
+  if (typeof ResizeObserver !== 'function') return; // 古いブラウザでは何もしない
+  const observer = new ResizeObserver(() => {
+    // 測る前に、ブラウザが位置を決め終わるのを1コマ待つ
+    requestAnimationFrame(updateToolbarHeightVar);
+  });
+  observer.observe(toolbarEl);
+  observer.observe(document.body);
+
+  // ホーム画面から起動したアプリを、他のアプリから戻ってきたときにも計算し直す。
+  // iPadでは、裏に回っている間に画面の向きが変わっていることがある。
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) requestAnimationFrame(updateToolbarHeightVar);
+  });
 }
 
 // ------------------------------------------------------------
@@ -257,9 +322,19 @@ const fileOpener = setupFileOpen({
     hideError();
     loadingOverlay.hidden = false;
   },
-  onLoadSuccess: (drawing) => {
+  onLoadSuccess: (drawing, name, buffer) => {
     loadingOverlay.hidden = true;
     currentDrawing = drawing;
+
+    // この図面を覚えておく（開発ルール20章）。
+    // アプリを更新するたびにファイルアプリから開き直させないため。
+    // 覚えるのは「元のファイルのバイト列」。解析済みではない（20.2）。
+    // 失敗しても表示には影響しないので、待たずに進める（20.5）。
+    if (name && buffer) {
+      saveDrawing(name, buffer).then((ok) => {
+        if (!ok) console.warn('[DXFビューア] この図面を覚えておけませんでした。');
+      });
+    }
 
     const vp = ensureViewport();
     // 【重要】全体表示には contentBounds（図面本体の範囲）を使う。
@@ -349,10 +424,81 @@ window.addEventListener('orientationchange', () => {
 // ------------------------------------------------------------
 // 起動
 // ------------------------------------------------------------
+// ------------------------------------------------------------
+// 新しい版が届いたときの案内（開発ルール5.2・21章）
+//
+// 黙って切り替えない。押されたときだけ切り替える。
+// 現場で図面を見ている最中に、勝手に画面が変わらないようにするため。
+// ------------------------------------------------------------
+
+// このページを開いた時点で、すでにオフライン用の仕組みが担当についていたか。
+//
+// 【ワーカーからの申し送り】
+// はじめてこのアプリを開いたときは、オフラインの準備が終わった合図が
+// 「更新があります」と同じ形で1回飛んでくる。
+// そのまま出すと、**初めて開いた人にいきなり「更新があります」と出てしまう。**
+// 最初から担当がついていたかどうかで見分けて、初回は出さない。
+const hadControllerAtStart =
+  typeof navigator !== 'undefined' &&
+  navigator.serviceWorker &&
+  Boolean(navigator.serviceWorker.controller);
+
+function setupUpdateBanner() {
+  updateClose.addEventListener('click', () => {
+    updateBanner.hidden = true;
+  });
+
+  startUpdateCheck({
+    onUpdateReady: (applyUpdate) => {
+      if (!hadControllerAtStart) {
+        // 初回の準備完了。更新ではないので案内は出さない。
+        return;
+      }
+      updateText.textContent = '新しい版があります。押すと切り替わります（今見ている図面はそのまま残ります）。';
+      updateApply.onclick = () => {
+        updateApply.disabled = true;
+        updateApply.textContent = '切り替え中…';
+        applyUpdate();
+      };
+      updateBanner.hidden = false;
+    },
+    onOffline: (ready) => {
+      // オフラインで使える状態になったかどうか。今は記録だけ残す。
+      console.info('[DXFビューア] オフラインで使える状態:', ready ? 'はい' : 'まだ');
+    },
+  });
+}
+
 async function main() {
   await loadPartnerModules();
   resizeCanvas();
+  watchLayoutChanges();
   maybeShowBrowserHint();
+  await restoreLastDrawing();
+  setupUpdateBanner();
+}
+
+/**
+ * 前回開いていた図面を、そのまま開き直す（開発ルール20.4）。
+ *
+ * アプリを更新するたびにファイルアプリから選び直すのは、現場では使えない。
+ * 覚えているのは元のファイルのバイト列なので、読み取りの作りを直したときは
+ * **新しい読み方で読み直される**（20.2）。
+ *
+ * 覚えていない・取り出せない場合は、何もしないで普通に起動する。
+ */
+async function restoreLastDrawing() {
+  if (!viewportMod || !renderMod) return; // 描く準備ができていなければ何もしない
+  let saved = null;
+  try {
+    saved = await loadLatestDrawing();
+  } catch (err) {
+    // storage.js は例外を投げない作りだが、念のため受け止める
+    console.warn('[DXFビューア] 覚えている図面を取り出せませんでした。', err);
+    return;
+  }
+  if (!saved || !saved.buffer || saved.buffer.byteLength === 0) return;
+  fileOpener.openBuffer(saved.name, saved.buffer);
 }
 
 main();
