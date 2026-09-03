@@ -13,20 +13,21 @@
 //   ここでは自分でY軸をひっくり返したりせず、createViewport() と fitToBounds() を
 //   使って表示状態（viewport）を作り、それを render.js の renderDrawing() に渡すだけにする。
 //
-// 【「用紙いっぱいに収める」（開発ルール26.2・26.6）は誰の仕事か】
-//   紙の向き（横/縦）は、囲んだ範囲の縦横比で決める（26.6）。この判定はここで行う。
-//   ただし「実際の紙の上でA4いっぱいに拡大縮小して表示する」処理そのものは、
-//   印刷画面を組み立てる src/ui/print-ui.js 側（@page とCSSでの表示）に任せる想定にした。
-//   理由：もしこの絵の大きさ自体をA4用紙のピクセル数（200dpiで 2212×1528点ほど）に
-//   合わせて縮めてしまうと、どんな範囲を囲んでも出来上がる絵は常にその大きさ以下になり、
-//   26.5の上限（長い辺4000点・全体1200万点）に絶対に届かなくなってしまう
-//   （実測10m角の敷地図でも、A4に収まるよう縮めた時点で 2212×1528 を超えない計算になる）。
-//   それでは上限が「安全装置」として機能しない。そのため、この絵の大きさは
-//   「囲んだ範囲を実寸のまま200dpiで描いたら何ピクセルになるか」を素直に計算し、
-//   大きくなりすぎたときだけ上限で縮める、という作りにした。
-//   ※ここは司令塔の設計意図と食い違う可能性があるので、つなぎ込み時に確認してほしい。
+// 【この絵は「A4用紙1枚そのもの」です（開発ルール29章）】
+//   作る絵は、囲んだ範囲の形ではなく**A4用紙1枚の形**にしている。
+//   外周8mmは白い余白で、図面はその内側にだけ描く。
+//
+//   理由：iPadのプリント画面は、渡された絵を紙いっぱいに引き伸ばす。
+//   絵と紙の形が違うと、そのときに絵が紙からはみ出す。
+//   プリンターは紙の端3〜5mmには物理的に印刷できないので、
+//   はみ出した部分＝図面の左右が切れて出てくる（実機で発生。v0.2.2の不具合）。
+//   絵と紙の形を同じにしておけば、引き伸ばされても位置がずれず、
+//   紙の縁で失われるのは白い余白だけになる。
+//
+//   絵の細かさは、紙の上で200dpi（26.5）。A4なので 2338×1653点、約386万点。
+//   囲んだ範囲が何ミリでも紙の上では必ず200dpiになる（範囲の実寸から決めてはいけない）。
 
-import { createViewport, fitToBounds } from './viewport.js';
+import { createViewport, fitToBounds, setSize, toScreen } from './viewport.js';
 import { renderDrawing } from './render.js';
 
 // ------------------------------------------------------------
@@ -46,9 +47,6 @@ const PX_PER_MM = TARGET_DPI / MM_PER_INCH; // ≒ 7.874016
 const A4_LONG_MM = 297;
 const A4_SHORT_MM = 210;
 const PAGE_MARGIN_MM = 8;
-// 紙のうち、実際に印刷できる範囲
-const PRINTABLE_LONG_MM = A4_LONG_MM - PAGE_MARGIN_MM * 2; // 281mm
-const PRINTABLE_SHORT_MM = A4_SHORT_MM - PAGE_MARGIN_MM * 2; // 194mm
 
 // 上限（26.5）。iPadで絵が大きすぎて落ちるのを防ぐ安全装置。
 // 紙の大きさから決めるかぎり、ふつうはここに当たらない。**当たらないのが正常。**
@@ -114,10 +112,24 @@ function defaultCreateCanvas(widthPx, heightPx) {
 
 /**
  * 印刷用の絵の大きさを決める。
+ *
+ * 【v0.2.3で変えたところ ／ 実機で「横が切れる」不具合が出たため（開発ルール29章）】
+ *   前は「囲んだ範囲の形をした絵」を作っていた。A4用紙とは形が違う。
+ *   その絵をiPadのプリント画面に渡すと、**紙いっぱいに引き伸ばされ**、
+ *   プリンターが物理的に印刷できない紙の端（ふつう上下左右3〜5mm）に
+ *   絵がはみ出して、左右が切れて出てきた。
+ *
+ *   そこで**絵そのものをA4用紙1枚の形**にした。
+ *   絵の外周8mmは白い余白で、図面はその内側にだけ描く。
+ *   絵と紙の形が同じなので引き伸ばされても位置がずれず、
+ *   はみ出す部分は白い余白なので、図面は絶対に切れない。
+ *
  * @param {object} area 図面座標での範囲 { minX, minY, maxX, maxY }
- * @returns {{ widthPx:number, heightPx:number, orientation:'landscape'|'portrait',
- *             scale:number, limited:boolean }}
- *   scale … 図面1単位が何ピクセルになるか
+ * @returns {{ widthPx:number, heightPx:number, innerWidthPx:number, innerHeightPx:number,
+ *             orientation:'landscape'|'portrait', scale:number, limited:boolean }}
+ *   widthPx / heightPx … 絵ぜんたい（＝A4用紙1枚）の点の数
+ *   innerWidthPx / innerHeightPx … 白い余白の内側、図面を描いてよい所の点の数
+ *   scale … 図面1単位が何ピクセルになるか（おおよそ。余白の付け方で少し変わる）
  *   limited … 上限に当たって小さくしたなら true
  */
 export function computePrintSize(area) {
@@ -129,7 +141,7 @@ export function computePrintSize(area) {
   const orientation = areaWmm >= areaHmm ? 'landscape' : 'portrait';
 
   // ------------------------------------------------------------
-  // 【いちばん大事な計算。ここを間違えると紙がぼやけます】
+  // 【いちばん大事な計算。ここを間違えると紙がぼやけたり切れたりします】
   //
   // このアプリの印刷は「**用紙に合わせて自動で拡大縮小**」です（26.2）。
   // 囲んだ範囲が何ミリだろうと、最後は紙いっぱいに引き伸ばして印刷されます。
@@ -140,62 +152,50 @@ export function computePrintSize(area) {
   // 実寸で決めると、こうなります（実際に測った数字）：
   //   100mm×60mm の小さな部分を囲む → 絵は 787×472点
   //   → それを紙（横281mm）いっぱいに引き伸ばす → **紙の上では71dpi。ぼやける**
-  // 「この部分だけ印刷したい」という**いちばんよくある使い方**で、ぼやけてしまいます。
   //
-  // 紙の大きさから決めれば、囲んだ範囲の大小にかかわらず、
-  // いつでも紙の上で200dpiになります。
+  // さらに、絵の**形**もA4用紙1枚と同じにします（29章）。
+  // 形が違うと、iPadが紙に合わせて引き伸ばしたときに端がはみ出し、
+  // プリンターが印刷できない紙の縁で切れてしまうためです。
   // ------------------------------------------------------------
 
-  // 紙のうち印刷できる範囲を、点の数に直す
-  const paperWmm = orientation === 'landscape' ? PRINTABLE_LONG_MM : PRINTABLE_SHORT_MM;
-  const paperHmm = orientation === 'landscape' ? PRINTABLE_SHORT_MM : PRINTABLE_LONG_MM;
-  const paperWpx = paperWmm * PX_PER_MM;
-  const paperHpx = paperHmm * PX_PER_MM;
+  // 絵ぜんたい ＝ A4用紙1枚
+  const pageWmm = orientation === 'landscape' ? A4_LONG_MM : A4_SHORT_MM;
+  const pageHmm = orientation === 'landscape' ? A4_SHORT_MM : A4_LONG_MM;
+  let widthPx = pageWmm * PX_PER_MM;
+  let heightPx = pageHmm * PX_PER_MM;
 
-  // 囲んだ範囲の縦横の比を保ったまま、紙の中にぴったり収まる大きさを求める。
-  // （紙の比とちょうど同じでないかぎり、上下か左右に余りが出る。それでよい）
-  const areaRatio = areaWmm > 0 && areaHmm > 0 ? areaWmm / areaHmm : 1;
-  const paperRatio = paperWpx / paperHpx;
+  // 図面を描いてよい所 ＝ 外周8mmの白い余白を除いた内側
+  let innerWidthPx = (pageWmm - PAGE_MARGIN_MM * 2) * PX_PER_MM;
+  let innerHeightPx = (pageHmm - PAGE_MARGIN_MM * 2) * PX_PER_MM;
 
-  let widthPx;
-  let heightPx;
-  if (areaRatio >= paperRatio) {
-    // 囲んだ範囲のほうが横長 → 紙の横幅いっぱいに合わせる
-    widthPx = paperWpx;
-    heightPx = paperWpx / areaRatio;
-  } else {
-    // 囲んだ範囲のほうが縦長 → 紙の高さいっぱいに合わせる
-    heightPx = paperHpx;
-    widthPx = paperHpx * areaRatio;
+  // 図面1単位が何ピクセルになるか（内側にちょうど収まる大きさ）
+  let scale = PX_PER_MM;
+  if (areaWmm > 0 && areaHmm > 0) {
+    scale = Math.min(innerWidthPx / areaWmm, innerHeightPx / areaHmm);
   }
-
-  // 範囲がほぼ点（幅か高さが実質0）のときの保険。0ピクセルの絵は作れない
-  if (!(widthPx > 0)) widthPx = 1;
-  if (!(heightPx > 0)) heightPx = 1;
-
-  // 図面1単位が何ピクセルになるか
-  let scale = areaWmm > 0 ? widthPx / areaWmm : PX_PER_MM;
 
   let limited = false;
 
-  // 上限1：長いほうの辺が4000点を超えない
+  // 上限（26.5）。A4・200dpiなら 2338×1653点＝約386万点なので、ここには当たらない。
+  // **当たらないのが正常。** 将来もっと大きな紙や高い細かさにしたときの安全装置として残す。
   const longSide = Math.max(widthPx, heightPx);
   if (longSide > MAX_LONG_SIDE_PX) {
     const factor = MAX_LONG_SIDE_PX / longSide;
     widthPx *= factor;
     heightPx *= factor;
+    innerWidthPx *= factor;
+    innerHeightPx *= factor;
     scale *= factor;
     limited = true;
   }
 
-  // 上限2：全体の点の数が1200万点を超えない（上限1だけでは足りない場合がある。
-  // 例：正方形に近い範囲は、長い辺を4000点まで許すと 4000×4000=1600万点になり、
-  // 1200万点の上限を超えてしまう）
   const totalPx = widthPx * heightPx;
   if (totalPx > MAX_TOTAL_PX) {
     const factor = Math.sqrt(MAX_TOTAL_PX / totalPx);
     widthPx *= factor;
     heightPx *= factor;
+    innerWidthPx *= factor;
+    innerHeightPx *= factor;
     scale *= factor;
     limited = true;
   }
@@ -204,8 +204,10 @@ export function computePrintSize(area) {
   // 丸めで1200万点をわずかに超えないよう、切り捨てる
   widthPx = Math.max(1, Math.floor(widthPx));
   heightPx = Math.max(1, Math.floor(heightPx));
+  innerWidthPx = Math.max(1, Math.floor(innerWidthPx));
+  innerHeightPx = Math.max(1, Math.floor(innerHeightPx));
 
-  return { widthPx, heightPx, orientation, scale, limited };
+  return { widthPx, heightPx, innerWidthPx, innerHeightPx, orientation, scale, limited };
 }
 
 /**
@@ -218,24 +220,67 @@ export function computePrintSize(area) {
  */
 export function renderPrintCanvas(drawing, area, options = {}) {
   const size = computePrintSize(area);
-  const { widthPx, heightPx, orientation, limited } = size;
+  const { widthPx, heightPx, innerWidthPx, innerHeightPx, orientation, limited } = size;
 
   const createCanvas = options.createCanvas || defaultCreateCanvas;
+  // 絵ぜんたいはA4用紙1枚ぶん。外周は白い余白になる（開発ルール29章）
   const canvas = createCanvas(widthPx, heightPx);
   const ctx = canvas.getContext('2d');
 
   // 表示状態（viewport）を作る。Y軸の反転などは viewport.js に任せる（開発ルール10.6）
-  const vp = createViewport(widthPx, heightPx);
+  //
+  // 手順は2つ：
+  //   1. まず「白い余白の内側」の大きさで作り、そこに囲んだ範囲を収める
+  //   2. そのあと紙ぜんたいの大きさに広げる（setSize は拡大率を変えず、
+  //      真ん中を保ったまま外側を広げるので、そこが白い余白になる）
+  // fitToBounds は画面用に、まわりへ5%のすき間を付ける（padBounds(0.05)＝縦横とも1.1倍）。
+  // 画面では見やすくてよいが、紙では**そのぶん図面が小さく印刷されてしまう**
+  // （A4横だと左右が8mmではなく20.8mmになった。実測）。
+  // 紙にはすでに8mmの白い余白があるので、ここでは1.1倍しておいて打ち消す。
+  const FIT_PAD = 1.1;
+  const vp = createViewport(innerWidthPx * FIT_PAD, innerHeightPx * FIT_PAD);
   const a = normalizeArea(area);
   fitToBounds(vp, { minX: a.minX, minY: a.minY, maxX: a.maxX, maxY: a.maxY });
+  setSize(vp, widthPx, heightPx);
+
+  // まず紙ぜんたいを白で塗る。
+  // このあと囲まれた範囲の中だけに描くので、外側は白い余白として残る。
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, widthPx, heightPx);
+
+  // 【囲んだ範囲の外は描かない（開発ルール29章）】
+  // 描く先は紙1枚ぶんに広がったので、何もしないと**囲んだ範囲の外にある図形**まで
+  // 余白に描かれてしまう。それでは：
+  //   - 「この範囲を印刷」と言いながら、範囲外のものが出てしまう
+  //   - せっかくの白い余白に線が来て、プリンターの縁でまた切れる
+  // ので、囲まれた範囲の四角の中だけに描くようにする。
+  // 範囲→画面(Canvas)の座標変換は、決まりどおり viewport.js に任せる（10.6）。
+  const [clipX1, clipY1] = toScreen(vp, a.minX, a.maxY); // 範囲の左上
+  const [clipX2, clipY2] = toScreen(vp, a.maxX, a.minY); // 範囲の右下
+  // 線の太さのぶんだけ外へ広げる。ちょうど境目にある線が半分だけ消えるのを防ぐ。
+  const にじみ = PRINT_LINE_WIDTH_PX;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(
+    clipX1 - にじみ,
+    clipY1 - にじみ,
+    clipX2 - clipX1 + にじみ * 2,
+    clipY2 - clipY1 + にじみ * 2
+  );
+  ctx.clip();
 
   // 画面の絵をそのまま引き伸ばすのではなく、図面データから描き直す（26.5）
   const { drawn } = renderDrawing(ctx, drawing, vp, {
     lineWidth: PRINT_LINE_WIDTH_PX, // 画面用(1.2)ではなく、印刷用に換算した太さ
     dpr: 1, // 印刷用のキャンバスは widthPx×heightPx がそのまま実ピクセル数なので等倍
+    // 白で塗りつぶすのは上で紙ぜんたいに済ませてある。
+    // ここで塗ると囲みの中だけになるので、透明な余白ができてしまう
+    background: 'transparent',
   });
 
-  return { canvas, widthPx, heightPx, orientation, drawn, limited };
+  ctx.restore();
+
+  return { canvas, widthPx, heightPx, innerWidthPx, innerHeightPx, orientation, drawn, limited };
 }
 
 /**

@@ -27,6 +27,8 @@ function makeFakeCtx(pixelWidth, pixelHeight) {
     restore: record('restore'),
     setTransform: record('setTransform'),
     fillRect: record('fillRect'),
+    rect: record('rect'),
+    clip: record('clip'),
     beginPath: record('beginPath'),
     closePath: record('closePath'),
     moveTo: record('moveTo'),
@@ -134,9 +136,9 @@ test('どんな大きさの範囲でも、紙の上で200dpiになる', () => {
   ];
   for (const area of 例) {
     const size = computePrintSize(area);
-    // 紙（A4から余白8mmを引いた大きさ）のうち、絵が接している辺で測る
-    const 紙幅mm = size.orientation === 'landscape' ? 281 : 194;
-    const 紙高mm = size.orientation === 'landscape' ? 194 : 281;
+    // 絵はA4用紙1枚ぶん（開発ルール29章）。紙ぜんたいの大きさで測る
+    const 紙幅mm = size.orientation === 'landscape' ? 297 : 210;
+    const 紙高mm = size.orientation === 'landscape' ? 210 : 297;
     const dpi = Math.max(size.widthPx / 紙幅mm, size.heightPx / 紙高mm) * 25.4;
     assert.ok(
       Math.abs(dpi - 200) < 2,
@@ -174,6 +176,46 @@ test('範囲が点のように小さくても（幅・高さが0でも）落ち�
   assert.ok(Number.isFinite(size.heightPx));
 });
 
+test('印刷する絵は、A4用紙1枚とぴったり同じ形になっている', () => {
+  // 【実機で起きた本番不具合（v0.2.2）／開発ルール29章】
+  // 前は「囲んだ範囲の形をした絵」を渡していた。A4とは形が違う。
+  // iPadのプリント画面はその絵を紙いっぱいに引き伸ばすので、絵が紙からはみ出し、
+  // プリンターが印刷できない紙の縁（3〜5mm）で**図面の左右が切れて**出てきた。
+  //
+  // 絵をA4と同じ形にしておけば、引き伸ばされても位置がずれず、
+  // 縁で失われるのは白い余白だけになる。
+  const 例 = [
+    { minX: 0, minY: 0, maxX: 100, maxY: 60 },
+    { minX: 0, minY: 0, maxX: 5000, maxY: 100 },   // 極端に横長
+    { minX: 0, minY: 0, maxX: 100, maxY: 5000 },   // 極端に縦長
+    { minX: 0, minY: 0, maxX: 500, maxY: 500 },    // 正方形
+  ];
+  const A4比 = 297 / 210;
+  for (const area of 例) {
+    const size = computePrintSize(area);
+    const 比 = size.orientation === 'landscape'
+      ? size.widthPx / size.heightPx
+      : size.heightPx / size.widthPx;
+    assert.ok(
+      Math.abs(比 - A4比) < 0.01,
+      `絵の形がA4と違う（${比.toFixed(3)} ≠ ${A4比.toFixed(3)}）。紙の縁で図面が切れる。範囲=${JSON.stringify(area)}`
+    );
+  }
+});
+
+test('図面は、紙の縁から8mm内側にだけ描く（白い余白を残す）', () => {
+  // 余白が無いと、プリンターが印刷できない紙の縁に図面がかかって切れる。
+  const size = computePrintSize({ minX: 0, minY: 0, maxX: 100, maxY: 60 });
+  const 余白px = (size.widthPx - size.innerWidthPx) / 2;
+  const 余白mm = 余白px / (200 / 25.4);
+  assert.ok(
+    余白mm >= 5,
+    `余白が ${余白mm.toFixed(1)}mm しかない。プリンターの縁（3〜5mm）で図面が切れる`
+  );
+  assert.ok(size.innerWidthPx < size.widthPx, '横の余白が無い');
+  assert.ok(size.innerHeightPx < size.heightPx, '縦の余白が無い');
+});
+
 // ============================================================
 // renderPrintCanvas — 実際に描く
 // ============================================================
@@ -190,6 +232,91 @@ test('renderPrintCanvas は computePrintSize と同じ大きさのキャンバ�
   assert.equal(created.length, 1);
   assert.equal(created[0].width, expected.widthPx);
   assert.equal(created[0].height, expected.heightPx);
+});
+
+test('図面は紙の縁ぎりぎりまで描かれない（実際に描いた線の位置で確かめる）', () => {
+  // 【これが「横が切れている」の再発防止テスト（開発ルール29章）】
+  // 大きさの計算だけでなく、**本当に描かれた線**が紙の縁から
+  // 8mm以上内側に収まっていることを、描画命令の座標で確かめる。
+  const PX_PER_MM = 200 / 25.4;
+  const 例 = [
+    { w: 1000, h: 400 },   // 横長
+    { w: 400, h: 1000 },   // 縦長
+    { w: 500, h: 500 },    // 正方形
+    { w: 5000, h: 100 },   // 極端に横長
+  ];
+  for (const { w, h } of 例) {
+    const drawing = {
+      units: 'mm',
+      bounds: { minX: 0, minY: 0, maxX: w, maxY: h },
+      contentBounds: { minX: 0, minY: 0, maxX: w, maxY: h },
+      layers: [],
+      entities: [
+        { type: 'line', layer: '0', color: '#000000', x1: 0, y1: 0, x2: w, y2: 0 },
+        { type: 'line', layer: '0', color: '#000000', x1: w, y1: 0, x2: w, y2: h },
+        { type: 'line', layer: '0', color: '#000000', x1: w, y1: h, x2: 0, y2: h },
+        { type: 'line', layer: '0', color: '#000000', x1: 0, y1: h, x2: 0, y2: 0 },
+      ],
+      unsupported: { count: 0, kinds: {} },
+      source: 'dxf',
+    };
+    const area = { minX: 0, minY: 0, maxX: w, maxY: h };
+    const created = [];
+    const r = renderPrintCanvas(drawing, area, { createCanvas: makeCreateCanvas(created) });
+
+    // moveTo / lineTo に渡された座標を全部集める
+    const 点 = created[0].ctx.calls
+      .filter((c) => c[0] === 'moveTo' || c[0] === 'lineTo')
+      .map((c) => [c[1], c[2]]);
+    assert.ok(点.length > 0, '線が1本も描かれていない');
+
+    const xs = 点.map((p) => p[0]);
+    const ys = 点.map((p) => p[1]);
+    const 左 = Math.min(...xs) / PX_PER_MM;
+    const 右 = (r.widthPx - Math.max(...xs)) / PX_PER_MM;
+    const 上 = Math.min(...ys) / PX_PER_MM;
+    const 下 = (r.heightPx - Math.max(...ys)) / PX_PER_MM;
+    const 最小余白 = Math.min(左, 右, 上, 下);
+    assert.ok(
+      最小余白 >= 7.5,
+      `図面が紙の縁から ${最小余白.toFixed(1)}mm しか離れていない。` +
+        `プリンターの縁で切れる。範囲=${w}×${h}`
+    );
+  }
+});
+
+test('紙の余白は広げすぎない（図面が小さく印刷されないように）', () => {
+  // 画面用の fitToBounds は5%のすき間を付ける。それをそのまま使うと
+  // A4横で左右が20.8mmになり、**紙がもったいない**（実測）。
+  // 紙では8mmだけにする。
+  const PX_PER_MM = 200 / 25.4;
+  const w = 1000;
+  const h = 400;
+  const drawing = {
+    units: 'mm',
+    bounds: { minX: 0, minY: 0, maxX: w, maxY: h },
+    contentBounds: { minX: 0, minY: 0, maxX: w, maxY: h },
+    layers: [],
+    entities: [
+      { type: 'line', layer: '0', color: '#000000', x1: 0, y1: 0, x2: w, y2: 0 },
+      { type: 'line', layer: '0', color: '#000000', x1: 0, y1: h, x2: w, y2: h },
+    ],
+    unsupported: { count: 0, kinds: {} },
+    source: 'dxf',
+  };
+  const created = [];
+  const r = renderPrintCanvas(drawing, { minX: 0, minY: 0, maxX: w, maxY: h }, {
+    createCanvas: makeCreateCanvas(created),
+  });
+  const xs = created[0].ctx.calls
+    .filter((c) => c[0] === 'moveTo' || c[0] === 'lineTo')
+    .map((c) => c[1]);
+  const 左mm = Math.min(...xs) / PX_PER_MM;
+  assert.ok(
+    左mm <= 9,
+    `左の余白が ${左mm.toFixed(1)}mm もある。図面が必要以上に小さく印刷される`
+  );
+  void r;
 });
 
 test('renderPrintCanvas は図面データから描き直す（drawn が図形の数だけ増える）', () => {

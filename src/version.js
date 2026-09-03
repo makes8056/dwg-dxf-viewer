@@ -9,5 +9,5 @@
 // 古い画面がユーザーに出続ける（04で実際に起きた事故）。
 // service-worker.js は import ができない形で登録するため、自動連動はできない。
 
-export const APP_VERSION = 'v0.2.2';
-export const BUILD_DATE = '2026-09-03';
+export const APP_VERSION = 'v0.2.3';
+export const BUILD_DATE = '2026-09-04';

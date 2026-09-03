@@ -120,13 +120,20 @@ test('紙の余白を0にしている（URL・日付・ページ番号を出さ�
   );
 });
 
-test('図面が紙の端にくっつかないよう、内側で余白を取っている', () => {
-  // @page の余白を0にしたぶん、こちらで余白を取る（開発ルール26.6の8mm）
+test('紙の余白を二重に取っていない（開発ルール29章）', () => {
+  // v0.2.3から、**絵そのものがA4用紙1枚の形で、外周8mmが白い余白**になった。
+  // ここでもう一度8mm取ると余白が二重になり、図面がむだに小さく印刷される。
+  // （余白そのものは src/print-area.js が付ける。tests/print-area.test.js で確認済み）
   const block = printBlocks(read('src/ui/ui.css'));
+  const i = block.indexOf('body > .print-area {');
+  assert.ok(i >= 0, '.print-area の指定が見つからない');
+  const 中身 = block.slice(i, block.indexOf('}', i));
+  const m = 中身.match(/padding\s*:\s*([^;]+);/);
+  assert.ok(m, '.print-area の padding の指定が見つからない');
   assert.match(
-    block,
-    /\.print-area\s*\{[\s\S]*?padding\s*:\s*8mm/,
-    '図面が紙の端にくっつく。.print-area の内側で余白を取ること'
+    m[1].trim(),
+    /^0$/,
+    `紙の余白が二重になっている（padding: ${m[1].trim()}）。図面が小さく印刷される`
   );
 });
 

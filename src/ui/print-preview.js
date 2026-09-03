@@ -101,8 +101,12 @@ export function createPrintPreview(handlers = {}) {
       currentBlob = info.blob || null;
       currentName = info.name || '図面.png';
 
+      // 【設定は標準のままでよい（開発ルール29章）】
+      // 絵そのものがA4用紙1枚の形なので、プリント画面で紙の向きや拡大率を
+      // いじる必要がない。触らせないほうが事故が減る。
       const 向き = info.orientation === 'portrait' ? '縦向き' : '横向き';
-      note.textContent = `用紙いっぱいに収めて印刷します（${向き}）`;
+      note.textContent =
+        'A4' + 向き + 'いっぱいに印刷します。プリント画面の設定は、そのままでかまいません。';
 
       overlay.hidden = false;
       open = true;

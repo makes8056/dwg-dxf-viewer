@@ -18,7 +18,7 @@
 // 【重要】新しい版を配布するときは、このCACHE_VERSIONを必ず変更すること。
 // 変更しないと、ファイルの中身を更新してもservice-worker.js自体のバイト列が変わらない場合
 // ブラウザが「更新なし」と判断し、新しい内容がキャッシュされないことがある。
-const CACHE_VERSION = 'v0.2.2'; // 配布のたびに更新。src/version.jsのAPP_VERSIONと手動で合わせる運用
+const CACHE_VERSION = 'v0.2.3'; // 配布のたびに更新。src/version.jsのAPP_VERSIONと手動で合わせる運用
 // （このファイルはクラシックスクリプトとして登録しているためimportできず、自動連動はできない）
 const CACHE_NAME = `dxf-viewer-shell-${CACHE_VERSION}`;
 

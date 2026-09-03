@@ -25,6 +25,12 @@
   flex-direction: column;
   width: 100%;
   max-width: 900px;
+  /* 【高さは max-height だけでなく height でも決めること】
+   * max-height だけだと、この箱の高さは「中身しだい」のままになる。
+   * すると中の .pv-image の max-height:100% が何に対する100%か決まらず効かず、
+   * **紙の下のほうが見切れて、印刷前の確認にならない。**
+   * height を入れて高さをはっきりさせると、絵は必ず縦にも収まる。 */
+  height: 100%;
   max-height: 100%;
   background: #ffffff;
   border-radius: 16px;
