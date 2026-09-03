@@ -289,7 +289,17 @@ export async function createPrintImage(drawing, area, options = {}) {
       return { error: ERROR_CANNOT_CREATE };
     }
 
-    return { dataUrl, widthPx, heightPx, orientation, limited };
+    // iPadへ渡すための「ファイルとしての絵」も作る（開発ルール28.2）。
+    // 共有メニューはファイルを受け取る決まりなので、データURLだけでは渡せない。
+    // 作れなくても印刷の確認画面は出せるので、失敗しても止めない。
+    let blob = null;
+    try {
+      blob = dataUrlToBlob(dataUrl);
+    } catch (err) {
+      blob = null;
+    }
+
+    return { dataUrl, blob, widthPx, heightPx, orientation, limited };
   } catch (err) {
     // 容量不足などでCanvasやtoDataURLが失敗しても、ここで必ず受け止めて日本語で返す。
     // 黙って何も起きないのがいちばん困る（開発ルール26.7）
@@ -302,6 +312,34 @@ export async function createPrintImage(drawing, area, options = {}) {
  * @param {object} areaScreen 画面上の四角 { width, height }（ピクセル）
  * @returns {{ ok:boolean, reason:string }} reason は日本語
  */
+/**
+ * データURL（`data:image/png;base64,...`）を、ファイルとして扱える形に直す。
+ *
+ * iPadの共有メニューは「ファイル」を受け取る決まりなので、この変換が要る。
+ * Canvas の toBlob() を使う手もあるが、あちらは待ち時間が入る。
+ * **待ち時間が入ると、iPadが共有メニューを開かせないことがある**（開発ルール28.3）ため、
+ * 待ち時間の要らないこちらのやり方を使う。
+ *
+ * @param {string} dataUrl
+ * @returns {Blob}
+ */
+export function dataUrlToBlob(dataUrl) {
+  const カンマ = String(dataUrl).indexOf(',');
+  if (カンマ < 0) throw new Error('絵のデータの形がおかしい');
+  const 見出し = dataUrl.slice(0, カンマ);
+  const 中身 = dataUrl.slice(カンマ + 1);
+
+  const 種類 = (見出し.match(/data:([^;,]+)/) || [])[1] || 'image/png';
+  if (!/;base64/i.test(見出し)) {
+    return new Blob([decodeURIComponent(中身)], { type: 種類 });
+  }
+
+  const 生 = atob(中身);
+  const bytes = new Uint8Array(生.length);
+  for (let i = 0; i < 生.length; i++) bytes[i] = 生.charCodeAt(i);
+  return new Blob([bytes], { type: 種類 });
+}
+
 export function isAreaBigEnough(areaScreen) {
   const w = areaScreen && Number(areaScreen.width);
   const h = areaScreen && Number(areaScreen.height);

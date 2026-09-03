@@ -21,6 +21,7 @@ import {
 } from '../storage.js';
 import { createDrawingList } from './drawing-list.js';
 import { createPrintUi } from './print-ui.js';
+import { createPrintPreview } from './print-preview.js';
 import { createPrintImage, isAreaBigEnough } from '../print-area.js';
 import { startUpdateCheck } from '../update-check.js';
 
@@ -93,6 +94,9 @@ let viewport = null;         // viewport.js が管理する「今どこを見て
 let currentDrawing = null;   // 読み込み済みの図面データ（src/drawing.js の形）
 let currentName = null;      // 今開いている図面のファイル名（一覧で「表示中」を出すのに使う）
 let redrawScheduled = false; // requestAnimationFrame の多重予約を防ぐ
+// 最後に「全体表示」を計算したときの、画面の大きさ。
+// 画面の大きさがまだ決まっていないうちに計算すると、図面が点のように小さくなる。
+let fittedWidth = 0;
 
 function ensureViewport() {
   if (!viewportMod) return null;
@@ -129,8 +133,33 @@ function resizeCanvas() {
   if (vp && viewportMod) {
     viewportMod.setSize(vp, cssWidth, cssHeight);
   }
+  refitIfFittedAtBadSize(cssWidth, cssHeight);
   updateToolbarHeightVar();
   scheduleRedraw();
+}
+
+/**
+ * 画面の大きさが決まる前に全体表示を計算してしまっていたら、計算し直す。
+ *
+ * 【なぜ要るか】
+ * アプリを開いた直後や、裏から戻ってきた直後は、
+ * 画面の大きさがまだ 0 に近いことがあります。
+ * その状態で全体表示を計算すると、**図面が点のように小さく表示され、
+ * そのまま直りません。** 実際にこの状態を確認しました。
+ *
+ * まともな大きさになった最初の1回だけ、計算し直します。
+ * ユーザーが自分で動かした位置を勝手に戻さないよう、**1回だけ**にしています。
+ */
+function refitIfFittedAtBadSize(cssWidth, cssHeight) {
+  const まともな大きさ = 50; // これ未満は「まだ決まっていない」とみなす
+  if (!currentDrawing || !viewport || !viewportMod) return;
+  if (fittedWidth >= まともな大きさ) return; // すでにまともな大きさで計算済み
+  if (cssWidth < まともな大きさ || cssHeight < まともな大きさ) return; // まだ決まっていない
+
+  const fitTo = currentDrawing.contentBounds || currentDrawing.bounds;
+  if (!fitTo) return;
+  viewportMod.fitToBounds(viewport, fitTo);
+  fittedWidth = cssWidth;
 }
 
 /**
@@ -360,6 +389,8 @@ const fileOpener = setupFileOpen({
     const fitTo = drawing.contentBounds || drawing.bounds;
     if (vp && viewportMod && fitTo) {
       viewportMod.fitToBounds(vp, fitTo);
+      // どの大きさで計算したかを覚えておく（小さすぎたら、あとで計算し直すため）
+      fittedWidth = vp.width;
     }
 
     showUnsupported(drawing);
@@ -442,6 +473,64 @@ const printUi = createPrintUi(canvas, {
   onCancel: () => { /* モードから抜けただけ。何もしない */ },
 });
 
+// 印刷される絵を、押す前に確認してもらう画面（開発ルール28.2）
+const printPreview = createPrintPreview({
+  onPrint: (blob, name) => { handOverToPrint(blob, name); },
+});
+
+/**
+ * 作った絵を、iPadに渡す（開発ルール28.2）。
+ *
+ * 【ここが指で押した流れの中であることが大事】
+ * iPadは、間に待ち時間が入ると共有メニューを開かせないことがある。
+ * そのため絵は先に作っておき、ここでは**渡すだけ**にしている（28.3）。
+ *
+ * @param {Blob|null} blob 図面の絵
+ * @param {string} name ファイル名
+ */
+function handOverToPrint(blob, name) {
+  // 1. iPadなど：共有メニューへ渡す。そこから「プリント」を選んでもらう。
+  //    ページを印刷しないので、**URL・日付・ページ番号は一切出ない。**
+  if (blob && typeof navigator.share === 'function') {
+    const file = new File([blob], name, { type: 'image/png' });
+    if (!navigator.canShare || navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file] }).then(
+        () => { printPreview.hide(); },
+        (err) => {
+          // ユーザーが自分でやめたときは、何も出さない（失敗ではない）
+          if (err && err.name === 'AbortError') return;
+          showError(
+            'プリントの画面を開けませんでした。\n' +
+              '確認の画面の絵を長押しして「画像を保存」してから、写真アプリで印刷してください。'
+          );
+        }
+      );
+      return;
+    }
+  }
+
+  // 2. パソコンなど、共有メニューが無い環境：これまでどおりページを印刷する。
+  //    こちらはURLや日付が入ることがあるが、パソコンでは印刷設定で消せる。
+  printFallbackViaPage();
+}
+
+/**
+ * 共有メニューが使えない環境のための、代わりの道（開発ルール28.4）。
+ * パソコン用。iPadでは通らない。
+ */
+function printFallbackViaPage() {
+  const img = printPreview.getImageElement();
+  if (!img || !img.getAttribute('src')) {
+    showError('印刷用の絵がありません。もう一度範囲を囲んでください。');
+    return;
+  }
+  // 【開発ルール28.3】絵は消さない。印刷中に片付けようとしないこと。
+  // 以前ここで片付けたために、紙の向きを変えると絵が消える不具合が起きた。
+  printImage.src = img.getAttribute('src');
+  printArea.hidden = false;
+  window.print();
+}
+
 /**
  * 囲まれた範囲を印刷する。
  * @param {object} rectScreen キャンバスの左上を基準にした四角 { x, y, width, height }
@@ -491,92 +580,39 @@ async function printSelectedArea(rectScreen) {
     return;
   }
 
-  // 紙の向き（開発ルール26.6）。横長なら横向き、縦長なら縦向き。
-  document.body.classList.remove('print-landscape', 'print-portrait');
-  document.body.classList.add(
-    result.orientation === 'portrait' ? 'print-portrait' : 'print-landscape'
-  );
-
-  // 絵を入れてから印刷を開く。**絵の読み込みが終わる前に印刷すると白紙になる。**
-  printImage.src = result.dataUrl;
-  await waitForImage(printImage);
-
-  printArea.hidden = false;
-
-  // 【iPadで起きた本番不具合。ここを元に戻さないこと】
+  // 【開発ルール28章】ここでは印刷しない。
   //
-  // iPadのSafariでは `window.print()` が **すぐに戻ってきます。**
-  // 印刷の画面は、そのあとから開きます。
-  // 以前はこの直後に絵を片付けていたため、**印刷される前に絵が消えていました。**
-  // その結果、紙には図面ではなく「印刷する図面」という代わりの文字だけが出ました
-  // （実際にそう印刷された紙を確認済み）。
+  // 以前はここで window.print() を呼んでいたが、iPadで次の不具合が起きた：
+  //   - 印刷画面で紙の向きを変えるとページが作り直され、そのとき絵が消えた
+  //   - 一度消えると、次に印刷しても二度と絵が出なかった
+  //   - 紙の余白にアプリのURLと日付が印刷された（iPadではCSSで止められない）
   //
-  // パソコンでは `window.print()` が印刷画面を閉じるまで待つので、
-  // **この不具合はパソコンでは絶対に再現しません。**
-  //
-  // そこで、片付けは「印刷が終わった合図（afterprint）」で行います。
-  schedulePrintCleanup();
-  window.print();
-}
-
-/**
- * 印刷が終わったら、絵を片付ける。
- *
- * `window.print()` の直後に片付けてはいけない（上の説明を参照）。
- * afterprint が来ない環境もあるので、時間切れの保険も置く。
- */
-function schedulePrintCleanup() {
-  let done = false;
-  const cleanup = () => {
-    if (done) return;
-    done = true;
-    window.removeEventListener('afterprint', cleanup);
-    clearTimeout(timer);
-    printArea.hidden = true;
-    printImage.removeAttribute('src');
-    document.body.classList.remove('print-landscape', 'print-portrait');
-  };
-  window.addEventListener('afterprint', cleanup);
-  // afterprint が来ない環境のための保険。
-  // 長めに待つ（印刷画面で紙やプリンターを選ぶ時間が要るため）。
-  const timer = setTimeout(cleanup, 120000);
-}
-
-/**
- * 絵の読み込みが終わるまで待つ。
- * ここを待たずに印刷すると、**紙が白紙になる**（絵がまだ無いまま印刷される）。
- * @param {HTMLImageElement} img
- */
-async function waitForImage(img) {
-  // 1. まず「読み込みが終わった」ことを確かめる。ここは必ず終わる。
-  await new Promise((resolve) => {
-    if (img.complete && img.naturalWidth > 0) { resolve(); return; }
-    const done = () => {
-      img.removeEventListener('load', done);
-      img.removeEventListener('error', done);
-      resolve();
-    };
-    img.addEventListener('load', done);
-    img.addEventListener('error', done);
-    // 万一いつまでも終わらないときも、印刷を止めない
-    setTimeout(done, 5000);
+  // そこで **ページを印刷するのをやめ、絵そのものをiPadへ渡す**ことにした。
+  // まずは確認の画面に出して、目で見てもらう。
+  printPreview.show(result.dataUrl, {
+    blob: result.blob || null,
+    name: makePrintFileName(),
+    orientation: result.orientation,
+    limited: result.limited,
   });
-
-  // 2. さらに「もう描ける状態」まで待てるなら待つ（decode）。
-  //
-  // 【落とし穴。ここに時間切れが要る理由】
-  // decode() は、**画面に出していない絵（display:none）では終わらないことがあります。**
-  // 印刷用の絵はふだん画面に出していないので、まさにこれに当たります。
-  // 時間切れを付けずに待つと、**印刷ボタンを押しても何も起きません**（実際にそうなった）。
-  //
-  // 読み込みは1で確かめてあるので、decode が終わらなくても印刷して構いません。
-  if (typeof img.decode === 'function') {
-    await Promise.race([
-      img.decode().catch(() => {}),
-      new Promise((resolve) => setTimeout(resolve, 1000)),
-    ]);
-  }
 }
+
+/**
+ * 印刷する絵のファイル名。図面の名前と日時から作る。
+ * iPadの共有メニューに、この名前で出る。
+ */
+function makePrintFileName() {
+  const d = new Date();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const 日時 =
+    `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}` +
+    `_${p2(d.getHours())}${p2(d.getMinutes())}`;
+  // もとのファイル名から拡張子（.dxf など）を外す
+  const もと = String(currentName || '図面').replace(/\.[^.]+$/, '');
+  return `${もと}_${日時}.png`;
+}
+
+
 
 attachToolbar(toolbarEl, {
   onOpen: () => {
@@ -606,6 +642,7 @@ attachToolbar(toolbarEl, {
     const fitTo = currentDrawing && (currentDrawing.contentBounds || currentDrawing.bounds);
     if (!vp || !fitTo) return;
     viewportMod.fitToBounds(vp, fitTo);
+    fittedWidth = vp.width;
     scheduleRedraw();
   },
   onZoomIn: () => {

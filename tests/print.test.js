@@ -130,51 +130,85 @@ test('図面が紙の端にくっつかないよう、内側で余白を取っ�
   );
 });
 
-test('印刷の直後に絵を片付けていない（iPadで白紙になる）', () => {
-  // 【iPadで起きた本番不具合】
-  // iPadのSafariでは window.print() がすぐ戻ってくる（印刷画面は後から開く）。
-  // その直後に絵を片付けると、**印刷される前に絵が消えて紙が白紙になる。**
-  // 実際に「印刷する図面」という代わりの文字だけが印刷された紙を確認した。
-  // パソコンでは print() が印刷画面を閉じるまで待つので、この不具合は再現しない。
+// ============================================================
+// 【印刷のやり方を変えた】（v0.2.2 / 開発ルール28章）
+//
+// 実機で分かったこと：
+//   - 印刷画面で紙の向きを変えるとページが作り直され、そのとき絵が消えた
+//   - 一度消えると、次に印刷しても二度と絵が出なかった
+//   - 紙の余白にURLと日付が印刷される（iPadではCSSで止められない）
+//
+// そこで**ページを印刷するのをやめ、絵そのものをiPadへ渡す**ことにした。
+// ============================================================
+
+test('印刷の前に、絵を確認する画面を出している', () => {
+  // 現場で紙を無駄にしないため、押す前に必ず目で確かめてもらう
   const app = read('src/ui/app.js');
+  assert.match(app, /printPreview\.show\(/, '確認の画面を出していない');
+});
 
-  // 片付けは afterprint（印刷が終わった合図）で行うこと
-  assert.match(
-    app,
-    /addEventListener\('afterprint'/,
-    '印刷の終わりを待たずに片付けている。iPadで紙が白紙になる'
-  );
+test('絵をファイルとしてiPadへ渡している（URL・日付を出さないため）', () => {
+  // ページを印刷しないので、ブラウザがURLや日付を入れる余地がそもそも無い
+  const app = read('src/ui/app.js');
+  assert.match(app, /navigator\.share/, '共有メニューへ渡していない');
+  assert.match(app, /files:\s*\[file\]/, 'ファイルとして渡していない');
+});
 
-  // window.print() の直後に src を消していないこと
-  const afterPrint = app.slice(app.indexOf('window.print()'));
-  const nextLines = afterPrint.split('\n').slice(0, 6).join('\n');
+test('「プリント」を押した流れの中で、待たずに共有メニューを開いている', () => {
+  // iPadは、間に待ち時間（await）が入ると共有メニューを開かせないことがある。
+  // そのため絵は先に作っておき、押した瞬間は渡すだけにする（開発ルール28.3）。
+  const app = read('src/ui/app.js');
+  const i = app.indexOf('function handOverToPrint');
+  assert.ok(i >= 0, '渡す処理が見つからない');
+  const body = app.slice(i, app.indexOf('\n}\n', i));
   assert.ok(
-    !/removeAttribute\('src'\)/.test(nextLines),
-    'window.print() の直後に絵を消している。iPadで紙が白紙になる'
+    !/\bawait\b/.test(body),
+    '共有メニューを開く前に待ち時間が入っている。iPadで共有メニューが開かなくなる'
   );
 });
 
-test('絵が描ける状態になるまで待ってから印刷している', () => {
-  // 読み込みだけでなく「もう描ける状態」まで待つ（decode）。
-  // ここを待たないと、絵がまだ無いまま印刷されて白紙になる。
+test('印刷中に絵を片付けようとしていない', () => {
+  // 【iPadで起きた本番不具合】
+  // 印刷画面で紙の向きを変えるとページが作り直され、そのとき「印刷が終わった」合図が飛ぶ。
+  // その合図で片付けると**絵が消え、以降は二度と印刷できなくなる。**
+  // 絵は消さなくてよい（画面には出ない作りなので、置いたままで害が無い）。
   const app = read('src/ui/app.js');
-  assert.match(app, /await waitForImage\(printImage\)/, '絵の準備を待たずに印刷している');
-  assert.match(app, /img\.decode\(\)/, '「描ける状態」まで待っていない');
+  assert.ok(
+    !/afterprint/.test(app),
+    '印刷の終わりで片付けようとしている。紙の向きを変えると絵が消える'
+  );
+  assert.ok(
+    !/printImage\.removeAttribute\('src'\)/.test(app),
+    '印刷用の絵を消している。次に印刷できなくなる'
+  );
 });
 
-test('絵の準備待ちに、必ず時間切れが付いている（押しても何も起きない不具合の防止）', () => {
-  // 【私（司令塔）自身が作り込んだ不具合】
-  // decode() は「もう描ける状態」まで待ってくれるが、
-  // **画面に出していない絵（display:none）では終わらない。**
-  // 印刷用の絵はふだん画面に出していないので、まさにこれに当たった。
-  // 時間切れを付けずに待った結果、**印刷ボタンを押しても何も起きなくなった**
-  // （3秒待っても decode が終わらないことを実測で確認）。
-  const app = read('src/ui/app.js');
-  const fn = app.slice(app.indexOf('async function waitForImage'));
-  const body = fn.slice(0, fn.indexOf('\n}\n'));
-
-  assert.match(body, /Promise\.race/, 'decode の待ちに時間切れが付いていない');
-  assert.match(body, /setTimeout/, 'decode の待ちに時間切れが付いていない');
-  // 読み込みの確認（complete / naturalWidth）が先にあること
-  assert.match(body, /img\.complete/, '読み込みの確認をしていない');
+test('確認画面は紙に出さない', () => {
+  const css = read('src/ui/print-preview.css');
+  assert.match(
+    css,
+    /@media\s+print\s*\{[\s\S]*?\.pv-overlay[\s\S]*?display\s*:\s*none/,
+    '確認画面が紙に印刷されてしまう'
+  );
 });
+
+test('確認画面のボタンは、指で押しやすい大きさ', () => {
+  // 手袋をしていても押せるように（開発ルール11章）
+  const css = read('src/ui/print-preview.css');
+  const m = css.match(/\.pv-cancel,\s*\n\.pv-print\s*\{([\s\S]*?)\}/);
+  assert.ok(m, 'ボタンの指定が見つからない');
+  const h = m[1].match(/min-height\s*:\s*(\d+)px/);
+  assert.ok(h && Number(h[1]) >= 44, `ボタンの高さが44px未満: ${h && h[1]}`);
+});
+
+test('絵をファイルに直す処理が、待ち時間を作らない', () => {
+  // toBlob() は待ち時間が入るので使わない（開発ルール28.3）。
+  // 待ち時間が入ると、iPadが共有メニューを開かせないことがある。
+  const pa = read('src/print-area.js');
+  assert.match(pa, /export function dataUrlToBlob/, 'ファイルに直す処理が無い');
+  const i = pa.indexOf('export function dataUrlToBlob');
+  const body = pa.slice(i, pa.indexOf('\n}\n', i));
+  assert.ok(!/\basync\b|\bawait\b/.test(body), '待ち時間が入る作りになっている');
+});
+
+

@@ -1,0 +1,160 @@
+/* print-preview.css — 印刷の確認画面の見た目（開発ルール28章）
+ *
+ * drawing-list.css・print-ui.css と同じ雰囲気（白基調・角丸・影）に揃えています。
+ * クラス名はすべて pv- で始めて、他とぶつからないようにしています。
+ *
+ * 重ね順（z-index）は 55。
+ *   版番号20 ／ お知らせ30 ／ 更新案内40 ／ 範囲を囲む画面45 ／ 図面一覧50 より前。
+ *   印刷の確認は、いちばん前に出したい。
+ */
+
+.pv-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
+           max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  background: rgba(20, 20, 20, 0.55);
+}
+
+.pv-box {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 900px;
+  max-height: 100%;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.pv-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e4e4e4;
+}
+
+.pv-title {
+  flex: 1;
+  font-size: 17px;
+  font-weight: bold;
+  color: #111111;
+}
+
+.pv-close {
+  flex: none;
+  /* 指で押しやすい大きさ（開発ルール11章） */
+  min-width: 44px;
+  min-height: 44px;
+  border: none;
+  border-radius: 10px;
+  background: #f0f0f0;
+  color: #333333;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* 絵を出すところ。ここだけがスクロールする（画面全体は動かさない）。 */
+.pv-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  overflow: auto;
+  /* 紙をイメージしやすいよう、薄い灰色の上に白い絵を置く */
+  background: #f2f2f2;
+}
+
+/* 印刷される絵。**紙と同じで、縦横の比は変えない**（contain）。 */
+.pv-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  background: #ffffff;
+  border: 1px solid #d8d8d8;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+}
+
+.pv-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border-top: 1px solid #e4e4e4;
+}
+
+.pv-note {
+  flex: 1 1 auto;
+  min-width: 140px;
+  font-size: 13px;
+  color: #555555;
+  line-height: 1.4;
+}
+
+.pv-buttons {
+  flex: none;
+  display: flex;
+  gap: 10px;
+}
+
+.pv-cancel,
+.pv-print {
+  /* 指で押しやすい大きさを必ず確保（開発ルール11章） */
+  min-width: 104px;
+  min-height: 48px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 12px;
+  font-size: 16px;
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.pv-cancel {
+  background: #f0f0f0;
+  color: #333333;
+}
+
+/* いちばん押してほしいボタンなので、はっきり目立たせる */
+.pv-print {
+  background: #0b4da2;
+  color: #ffffff;
+  font-weight: bold;
+}
+
+.pv-print:active {
+  background: #093d80;
+}
+
+/* 画面が狭いときは、ボタンを横いっぱいに広げて押しやすくする */
+@media (max-width: 520px) {
+  .pv-buttons {
+    flex: 1 1 100%;
+  }
+  .pv-cancel,
+  .pv-print {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+}
+
+/* 【重要】この画面は紙に出さない（開発ルール26.6）。
+ * そもそもページを印刷しない作りになったが、パソコン用の代わりの道
+ * （window.print）を通ったときに写り込まないよう、念のため消しておく。 */
+@media print {
+  .pv-overlay {
+    display: none !important;
+  }
+}
