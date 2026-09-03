@@ -20,6 +20,8 @@ import {
   forgetDrawing,
 } from '../storage.js';
 import { createDrawingList } from './drawing-list.js';
+import { createPrintUi } from './print-ui.js';
+import { createPrintImage, isAreaBigEnough } from '../print-area.js';
 import { startUpdateCheck } from '../update-check.js';
 
 // ------------------------------------------------------------
@@ -47,6 +49,9 @@ const updateBanner = document.getElementById('update-banner');
 const updateText = document.getElementById('update-text');
 const updateApply = document.getElementById('update-apply');
 const updateClose = document.getElementById('update-close');
+
+const printArea = document.getElementById('print-area');
+const printImage = document.getElementById('print-image');
 
 const browserHint = document.getElementById('browser-hint');
 const browserHintClose = document.getElementById('browser-hint-close');
@@ -422,6 +427,106 @@ async function showDrawingList() {
   drawingList.show(items, currentName);
 }
 
+// ------------------------------------------------------------
+// 範囲指定プリント（開発ルール26章。このアプリの一番の目的）
+//
+// 流れ：
+//   1. 「印刷する範囲」を押す → 範囲を囲むモードに入る
+//   2. 指でなぞって囲む
+//   3. 「この範囲を印刷」→ 画面座標を図面座標に直す
+//   4. 図面データから**描き直して**印刷用の絵を作る（画面の絵を引き伸ばさない）
+//   5. iPadの標準の印刷画面を開く
+// ------------------------------------------------------------
+const printUi = createPrintUi(canvas, {
+  onPrint: (rectScreen) => { printSelectedArea(rectScreen); },
+  onCancel: () => { /* モードから抜けただけ。何もしない */ },
+});
+
+/**
+ * 囲まれた範囲を印刷する。
+ * @param {object} rectScreen キャンバスの左上を基準にした四角 { x, y, width, height }
+ */
+async function printSelectedArea(rectScreen) {
+  // 【開発ルール26.7】指が滑っただけの小さな範囲では印刷させない。
+  // 判定は print-area.js に置いてある（画面を作る側と、絵を作る側で二重に持たない）。
+  const check = isAreaBigEnough(rectScreen);
+  if (!check.ok) {
+    showError(check.reason);
+    printUi.start(); // もう一度囲んでもらう
+    return;
+  }
+
+  const vp = ensureViewport();
+  if (!vp || !viewportMod || !currentDrawing) {
+    showError('図面が開かれていません。先に図面を開いてください。');
+    return;
+  }
+
+  // 画面の座標 → 図面の座標。変換は viewport.js に任せる（開発ルール10.6）。
+  const [x1, y1] = viewportMod.toDrawing(vp, rectScreen.x, rectScreen.y);
+  const [x2, y2] = viewportMod.toDrawing(
+    vp,
+    rectScreen.x + rectScreen.width,
+    rectScreen.y + rectScreen.height
+  );
+  const area = {
+    minX: Math.min(x1, x2),
+    minY: Math.min(y1, y2),
+    maxX: Math.max(x1, x2),
+    maxY: Math.max(y1, y2),
+  };
+
+  loadingOverlay.hidden = false;
+  let result;
+  try {
+    result = await createPrintImage(currentDrawing, area);
+  } catch (err) {
+    // print-area.js は例外を投げない作りだが、念のため受け止める
+    result = { error: `印刷用の絵を作れませんでした。\n詳細：${err && err.message ? err.message : err}` };
+  }
+  loadingOverlay.hidden = true;
+
+  if (!result || result.error) {
+    showError((result && result.error) || '印刷用の絵を作れませんでした。');
+    return;
+  }
+
+  // 紙の向き（開発ルール26.6）。横長なら横向き、縦長なら縦向き。
+  document.body.classList.remove('print-landscape', 'print-portrait');
+  document.body.classList.add(
+    result.orientation === 'portrait' ? 'print-portrait' : 'print-landscape'
+  );
+
+  // 絵を入れてから印刷を開く。**絵の読み込みが終わる前に印刷すると白紙になる。**
+  printImage.src = result.dataUrl;
+  await waitForImage(printImage);
+
+  printArea.hidden = false;
+  try {
+    window.print();
+  } finally {
+    // 印刷画面を閉じたあと、画面に絵が残らないよう必ず片付ける
+    printArea.hidden = true;
+    printImage.removeAttribute('src');
+  }
+}
+
+/**
+ * 絵の読み込みが終わるまで待つ。
+ * ここを待たずに印刷すると、**紙が白紙になる**（絵がまだ無いまま印刷される）。
+ * @param {HTMLImageElement} img
+ */
+function waitForImage(img) {
+  return new Promise((resolve) => {
+    if (img.complete && img.naturalWidth > 0) { resolve(); return; }
+    const done = () => { img.removeEventListener('load', done); img.removeEventListener('error', done); resolve(); };
+    img.addEventListener('load', done);
+    img.addEventListener('error', done);
+    // 万一いつまでも終わらないときも、印刷を止めない
+    setTimeout(done, 3000);
+  });
+}
+
 attachToolbar(toolbarEl, {
   onOpen: () => {
     if (!viewportMod || !renderMod) {
@@ -429,6 +534,14 @@ attachToolbar(toolbarEl, {
       return;
     }
     fileOpener.open();
+  },
+  onPrint: () => {
+    if (!currentDrawing) {
+      showError('先に図面を開いてください。');
+      return;
+    }
+    hideError();
+    printUi.start();
   },
   onRecent: () => {
     if (!viewportMod || !renderMod) {

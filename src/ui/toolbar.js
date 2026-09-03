@@ -1,7 +1,7 @@
 // toolbar.js — 画面のボタン類（開発ルール2.2：1ファイル1役割）
 //
-// このアプリで用意するボタンは、この5つだけ（むやみに増やさない）。
-//   図面を開く／図面を選ぶ／全体表示／拡大／縮小
+// このアプリで用意するボタンは、この6つだけ（むやみに増やさない）。
+//   図面を開く／図面を選ぶ／全体表示／拡大／縮小／印刷する範囲
 //
 // このファイルは「ボタンを画面に出して、押されたことを伝える」だけをする。
 // 図面を動かしたり読み込んだりする処理は一切ここに書かない（開発ルール2.3・2.4）。
@@ -37,6 +37,17 @@ const ICONS = {
       <rect x="3.5" y="10.3" width="17" height="3.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.7" />
       <rect x="3.5" y="16.1" width="17" height="3.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.7" />
     </svg>`,
+  // 印刷する範囲：プリンターの絵に、囲みを表す点線の四角を重ねる
+  print: `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 9V4.5h10V9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+      <path d="M5 9h14a1.5 1.5 0 0 1 1.5 1.5v5A1.5 1.5 0 0 1 19 17h-1"
+            fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+      <path d="M6 17H5a1.5 1.5 0 0 1-1.5-1.5v-5A1.5 1.5 0 0 1 5 9"
+            fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+      <rect x="7" y="13.5" width="10" height="6.5" rx="1"
+            fill="none" stroke="currentColor" stroke-width="1.7" stroke-dasharray="2.6 2" />
+    </svg>`,
 };
 
 const BUTTONS = [
@@ -46,6 +57,8 @@ const BUTTONS = [
   { action: 'fit', icon: ICONS.fit, label: '全体表示' },
   { action: 'zoom-in', icon: ICONS.zoomIn, label: '拡大' },
   { action: 'zoom-out', icon: ICONS.zoomOut, label: '縮小' },
+  // このアプリの一番の目的（開発ルール26章）。右端に置いて押し間違えを減らす。
+  { action: 'print', icon: ICONS.print, label: '印刷する範囲' },
 ];
 
 /**
@@ -57,6 +70,7 @@ const BUTTONS = [
  *   onFit()     … 「全体表示」が押された
  *   onZoomIn()  … 「拡大」が押された
  *   onZoomOut() … 「縮小」が押された
+ *   onPrint()   … 「印刷する範囲」が押された（範囲を囲むモードに入る）
  * @returns {() => void} 後片付け用。呼ぶとボタンの反応をやめる。
  */
 export function attachToolbar(container, handlers = {}) {
@@ -76,6 +90,7 @@ export function attachToolbar(container, handlers = {}) {
     else if (action === 'fit') handlers.onFit && handlers.onFit();
     else if (action === 'zoom-in') handlers.onZoomIn && handlers.onZoomIn();
     else if (action === 'zoom-out') handlers.onZoomOut && handlers.onZoomOut();
+    else if (action === 'print') handlers.onPrint && handlers.onPrint();
   };
 
   container.addEventListener('click', onClick);

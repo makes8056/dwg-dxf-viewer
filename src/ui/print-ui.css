@@ -1,0 +1,165 @@
+/* print-ui.css — 「印刷する範囲を指で囲む」画面の見た目だけ（開発ルール26章）
+ *
+ * drawing-list.css と同じ雰囲気（白基調・角丸・影）に揃える。
+ * クラス名はすべて pr- で始めて、他の部品とぶつからないようにする。
+ *
+ * 重ね順（z-index）は 45。版番号(20)・お知らせ(30)・更新案内(40) より前、
+ * 図面一覧(50) より後ろ（司令塔からの指示どおり）。
+ *
+ * 【表示・非表示について】
+ * ui.css の [hidden]{display:none!important} に素直に乗る（drawing-list.css と同じ理由）。
+ */
+
+.pr-board {
+  position: fixed;
+  z-index: 45;
+  /* これが無いと、指でなぞる操作をブラウザ（画面のスクロールなど）に取られてしまう
+   * （開発ルール26.4／9章と同じ理由）。 */
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  /* pr-select の外側を暗くする box-shadow を、キャンバスの範囲内だけに収める。 */
+  overflow: hidden;
+}
+
+/* ------------------------------------------------------------
+ * 上部の案内（今なにをするモードか、ひと目で分かるように。開発ルール11.5・26.3）
+ * ---------------------------------------------------------- */
+.pr-guide {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  max-width: calc(100% - 24px);
+  padding: 10px 18px;
+  background: #eaf2ff;
+  color: #123a7a;
+  border: 1px solid #b9d2f7;
+  border-radius: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+  /* 案内の上を指でなぞっても、板がその指を受け取れるようにする（案内自体はクリックされない）。 */
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------
+ * なぞっている範囲（半透明の四角）と、外側を暗くする幕
+ * ---------------------------------------------------------- */
+.pr-select {
+  position: absolute;
+  border: 2px solid #0b4da2;
+  background: rgba(11, 77, 162, 0.15);
+  /* 大きく広がった影で、四角の外側だけを暗くする定番の作り方。
+   * .pr-board の overflow:hidden が、キャンバスの外へはみ出さないように止めてくれる。 */
+  box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+/* 四角の大きさ（横◯◯×縦◯◯）。画面のピクセル数でよい（開発ルール26.2） */
+.pr-dim {
+  position: absolute;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(17, 17, 17, 0.78);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.6;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------------
+ * 指を離したあとに出す3つのボタン
+ * ---------------------------------------------------------- */
+.pr-actions {
+  position: absolute;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(440px, calc(100% - 24px));
+  padding: 14px;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+.pr-actions-row {
+  display: flex;
+  gap: 10px;
+}
+
+/* 指で押しやすい大きさを必ず確保する（開発ルール11章：1辺44px以上）。 */
+.pr-btn {
+  flex: 1 1 0;
+  min-width: 44px;
+  min-height: 48px;
+  border: none;
+  border-radius: 12px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* 「この範囲を印刷」はいちばん目立たせる（開発ルール26.3）。 */
+.pr-btn-print {
+  width: 100%;
+  min-height: 52px;
+  background: #0b4da2;
+  color: #ffffff;
+  font-size: 17px;
+}
+
+.pr-btn-print:active {
+  background: #083a7a;
+}
+
+.pr-btn-retry {
+  background: #f4f4f4;
+  color: #111111;
+}
+
+.pr-btn-retry:active {
+  background: #dcebff;
+}
+
+.pr-btn-cancel {
+  background: #fdecea;
+  color: #a33025;
+}
+
+.pr-btn-cancel:active {
+  background: #f7d3ce;
+}
+
+/* ------------------------------------------------------------
+ * 横向き（landscape）で高さが狭いときも、ボタンの箱が詰まりすぎないようにする。
+ * ---------------------------------------------------------- */
+@media (orientation: landscape) and (max-height: 480px) {
+  .pr-actions {
+    padding: 10px;
+    gap: 8px;
+  }
+  .pr-btn-print {
+    min-height: 48px;
+  }
+}
+
+/* ------------------------------------------------------------
+ * 【重要】印刷のときに、この画面を紙に出さない（開発ルール26.6）。
+ * 図面以外は一切印刷しない。この案内・四角・ボタンは紙には不要。
+ * ---------------------------------------------------------- */
+@media print {
+  .pr-board {
+    display: none !important;
+  }
+}

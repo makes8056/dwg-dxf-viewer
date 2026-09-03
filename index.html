@@ -11,6 +11,7 @@
 <title>DWG・DXFビューア</title>
 <link rel="stylesheet" href="./src/ui/ui.css">
 <link rel="stylesheet" href="./src/ui/drawing-list.css">
+<link rel="stylesheet" href="./src/ui/print-ui.css">
 
 <!-- ホーム画面に追加してアプリのように使うための設定（開発ルール5章・11章）。
      start_url は manifest.json 側で "./" にしてある。
@@ -71,6 +72,13 @@
     <span id="update-text" class="update-text"></span>
     <button type="button" id="update-apply" class="update-apply">更新する</button>
     <button type="button" id="update-close" class="update-close" aria-label="あとにする">×</button>
+  </div>
+
+  <!-- 印刷用の入れ物（開発ルール26章）。
+       ふだんは画面に出さない。印刷のときだけ、ここに入れた図面の絵が紙に出る。
+       紙にはこの中身だけを出し、ボタン・案内・版番号は一切出さない（26.6）。 -->
+  <div id="print-area" class="print-area" hidden>
+    <img id="print-image" class="print-image" alt="印刷する図面">
   </div>
 
   <!-- 画面の入口はここ1つだけ（開発ルール9.4・2.1）。あとは import でつなぐ。 -->
