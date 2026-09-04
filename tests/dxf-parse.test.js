@@ -167,10 +167,82 @@ test('対応していない図形は、捨てずに種類ごとに数える', ()
   const d = load('unsupported.dxf');
   // 直線1本 ＋ 楕円1個（v0.1.6で対応した）
   assert.equal(d.entities.length, 2, '対応している図形が残っていない');
-  assert.equal(d.unsupported.count, 3);
+  assert.equal(d.unsupported.count, 2);
   assert.equal(d.unsupported.kinds.SPLINE, 2);
-  assert.equal(d.unsupported.kinds.HATCH, 1);
   assert.equal(d.unsupported.kinds.ELLIPSE, undefined, '楕円はもう対応しているので数えない');
+  assert.equal(d.unsupported.kinds.HATCH, undefined, 'ハッチングはもう対応している（38章）');
+});
+
+// ============================================================
+// ハッチング（38章）
+// ============================================================
+
+test('斜線のハッチングが、囲いの中だけに線として出る', () => {
+  // 100×100の四角を、45度・間隔10の斜線で埋めた見本
+  const d = load('hatch-pattern.dxf');
+  const 線 = d.entities.filter((e) => e.type === 'line');
+  assert.ok(線.length >= 10, `斜線が ${線.length} 本しかない。ハッチングが出ていない`);
+  assert.equal(d.unsupported.count, 0, 'ハッチングが「表示できませんでした」に数えられている');
+
+  for (const e of 線) {
+    // 囲いの外へはみ出していないこと
+    for (const [x, y] of [[e.x1, e.y1], [e.x2, e.y2]]) {
+      assert.ok(
+        x >= -0.001 && x <= 100.001 && y >= -0.001 && y <= 100.001,
+        `斜線が四角からはみ出している（${x}, ${y}）`
+      );
+    }
+    // 指定した45度になっていること
+    const 角度 = (((Math.atan2(e.y2 - e.y1, e.x2 - e.x1) * 180) / Math.PI % 180) + 180) % 180;
+    assert.ok(Math.abs(角度 - 45) < 0.01, `斜線の角度が45度でない（${角度.toFixed(2)}度）`);
+  }
+});
+
+test('斜線の間隔が、指定したとおりになる', () => {
+  // 間隔がずれると、CADで見たハッチングと濃さが変わってしまう
+  const d = load('hatch-pattern.dxf');
+  const 線 = d.entities.filter((e) => e.type === 'line');
+  // 線と直角の向きへ投影して、となりとの差を見る
+  const 角 = (Math.PI * 3) / 4;
+  const 距離 = 線.map((e) => e.x1 * Math.cos(角) + e.y1 * Math.sin(角)).sort((a, b) => a - b);
+  for (let i = 1; i < 距離.length; i++) {
+    assert.ok(
+      Math.abs(距離[i] - 距離[i - 1] - 10) < 0.001,
+      `線と線の間隔が10になっていない（${(距離[i] - 距離[i - 1]).toFixed(3)}）`
+    );
+  }
+});
+
+test('べた塗りのハッチングは、囲いの形だけ描く', () => {
+  // 塗りつぶす仕組みが無いので、SOLIDと同じ扱いにしている（38.3）。
+  // 何も出さないと、そこに何かある**ことすら**分からなくなる
+  const d = load('hatch-solid.dxf');
+  const 囲い = d.entities.filter((e) => e.type === 'polyline');
+  assert.equal(囲い.length, 1, 'べた塗りの囲いが出ていない');
+  assert.equal(囲い[0].closed, true, '囲いが閉じていない');
+  assert.equal(囲い[0].points.length, 4, '四角の頂点が4つでない');
+  assert.equal(d.unsupported.count, 0);
+});
+
+test('囲いの無いハッチングは、何も出さないし数えもしない', () => {
+  // ほかの図形にぶら下がっているだけのハッチングがある（実物の図面にあった）。
+  // 描くものが無いので、「表示できませんでした」と言うと**無用な心配をかける**（23章）
+  const d = load('unsupported.dxf');
+  assert.equal(d.unsupported.kinds.HATCH, undefined);
+});
+
+// ============================================================
+// 点（POINT）
+// ============================================================
+
+test('点（POINT）が図形として出る', () => {
+  // CADの $PDMODE が 0 のとき、点は小さな丸で表示される（実物の図面で確認）
+  const d = load('point.dxf');
+  const 点 = d.entities.filter((e) => e.type === 'point');
+  assert.equal(点.length, 1, '点が出ていない');
+  assert.equal(点[0].x, 30);
+  assert.equal(点[0].y, 40);
+  assert.equal(d.unsupported.count, 0, '点が「表示できませんでした」に数えられている');
 });
 
 // ============================================================

@@ -135,6 +135,8 @@ function drawEntity(ctx, entity, viewport, lineWidthPx) {
       return drawArc(ctx, entity, viewport);
     case 'ellipse':
       return drawEllipse(ctx, entity, viewport);
+    case 'point':
+      return drawPoint(ctx, entity, viewport, lineWidthPx);
     case 'text':
       return drawText(ctx, entity, viewport);
     default:
@@ -150,6 +152,21 @@ function drawLine(ctx, e, vp) {
   ctx.moveTo(sx1, sy1);
   ctx.lineTo(sx2, sy2);
   ctx.stroke();
+  return true;
+}
+
+/**
+ * 点（POINT）を描く。
+ * CADは $PDMODE=0 のとき小さな丸で表示する。ここも小さな丸にする。
+ * 大きさは**線の太さに合わせる**ので、画面でも紙でもちょうどよい大きさになる。
+ */
+function drawPoint(ctx, e, vp, lineWidthPx) {
+  const [sx, sy] = toScreen(vp, e.x, e.y);
+  const r = Math.max(0.6, (lineWidthPx || 1) * 0.9);
+  ctx.fillStyle = e.color || '#000000';
+  ctx.beginPath();
+  ctx.arc(sx, sy, r, 0, Math.PI * 2);
+  ctx.fill();
   return true;
 }
 

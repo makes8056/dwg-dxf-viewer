@@ -133,6 +133,7 @@ export function entityTouchesArea(e, area, margin = 0) {
     const r = Math.max(Math.abs(e.rx || 0), Math.abs(e.ry || 0));
     return 重なる(e.cx - r, e.cy - r, e.cx + r, e.cy + r);
   }
+  if (e.type === 'point') return 重なる(e.x, e.y, e.x, e.y);
   if (e.type === 'text') {
     // 文字の広がりは分からないので、大きめに見積もる（切り落とさないため）
     const h = Math.abs(e.height || 0);
@@ -474,6 +475,17 @@ export function createPrintPdf(drawing, area, options = {}) {
           d += ` ${n(X(c[0]))} ${n(Y(c[1]))} ${n(X(c[2]))} ${n(Y(c[3]))} ${n(X(c[4]))} ${n(Y(c[5]))} c`;
         }
         ops.push(d + ' S');
+        drawn++;
+      } else if (e.type === 'point') {
+        // 小さな丸で塗る。大きさは線の太さに合わせる（画面と同じ考え方）
+        色を変える(e.color, true);
+        const r = PRINT_LINE_WIDTH_MM * PT_PER_MM * 0.9;
+        const { start, curves } = ellipseToBezier(X(e.x), Y(e.y), r, r, 0, 0, 360);
+        let d = `${n(start[0])} ${n(start[1])} m`;
+        for (const cv of curves) {
+          d += ` ${n(cv[0])} ${n(cv[1])} ${n(cv[2])} ${n(cv[3])} ${n(cv[4])} ${n(cv[5])} c`;
+        }
+        ops.push(d + ' f');
         drawn++;
       } else if (e.type === 'text') {
         const 文字 = String(e.text == null ? '' : e.text);

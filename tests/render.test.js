@@ -24,6 +24,7 @@ function makeFakeCtx(pixelWidth, pixelHeight) {
     restore: record('restore'),
     setTransform: record('setTransform'),
     fillRect: record('fillRect'),
+    fill: record('fill'),
     beginPath: record('beginPath'),
     closePath: record('closePath'),
     moveTo: record('moveTo'),
@@ -353,4 +354,42 @@ test('中央ぞろえ（寸法の数字）は、そのまま中央のまま', ()
   renderDrawing(ctx, drawing, vp, {});
   assert.equal(ctx.textBaseline, 'middle');
   assert.equal(ctx.textAlign, 'center');
+});
+
+// ============================================================
+// 点（POINT）（開発ルール38章）
+// ============================================================
+
+test('点は、小さな丸として塗られる', () => {
+  // CADは $PDMODE が 0 のとき、点を小さな丸で表示する
+  const ctx = makeFakeCtx(400, 300);
+  const vp = createViewport(400, 300);
+  fitToBounds(vp, { minX: 0, minY: 0, maxX: 100, maxY: 100 });
+  const drawing = {
+    units: 'mm', bounds: null, layers: [],
+    entities: [{ type: 'point', layer: '0', color: '#ff0000', x: 50, y: 50 }],
+    unsupported: { count: 0, kinds: {} }, source: 'dxf',
+  };
+  const { drawn } = renderDrawing(ctx, drawing, vp, { dpr: 1 });
+  assert.equal(drawn, 1, '点が描かれていない');
+  const 丸 = ctx.calls.filter((c) => c[0] === 'arc');
+  assert.equal(丸.length, 1, '丸を描いていない');
+  assert.ok(丸[0][3] > 0, `丸の大きさが0以下（${丸[0][3]}）`);
+  assert.ok(ctx.calls.some((c) => c[0] === 'fill'), '塗っていない（線だけでは見えない）');
+});
+
+test('点の大きさは、線の太さに合わせて変わる', () => {
+  // 画面でも紙でも、ちょうどよい大きさになるようにするため
+  const 半径 = (lineWidth) => {
+    const ctx = makeFakeCtx(400, 300);
+    const vp = createViewport(400, 300);
+    fitToBounds(vp, { minX: 0, minY: 0, maxX: 100, maxY: 100 });
+    renderDrawing(ctx, {
+      units: 'mm', bounds: null, layers: [],
+      entities: [{ type: 'point', layer: '0', color: '#000000', x: 50, y: 50 }],
+      unsupported: { count: 0, kinds: {} }, source: 'dxf',
+    }, vp, { dpr: 1, lineWidth });
+    return ctx.calls.find((c) => c[0] === 'arc')[3];
+  };
+  assert.ok(半径(4) > 半径(1), '線を太くしても点の大きさが変わらない');
 });

@@ -32,7 +32,8 @@ function makeFakeCtx(pixelWidth, pixelHeight) {
     calls,
     canvas: { width: pixelWidth, height: pixelHeight },
     save: record('save'), restore: record('restore'), setTransform: record('setTransform'),
-    fillRect: record('fillRect'), rect: record('rect'), clip: record('clip'),
+    fillRect: record('fillRect'),
+    fill: record('fill'), rect: record('rect'), clip: record('clip'),
     beginPath: record('beginPath'), closePath: record('closePath'),
     moveTo: record('moveTo'), lineTo: record('lineTo'), stroke: record('stroke'),
     arc: record('arc'), ellipse: record('ellipse'), fillText: record('fillText'),
@@ -413,4 +414,32 @@ test('PDFを作る処理は、待ち時間を作らない', () => {
 test('オフライン用の一覧に、PDFの係が入っている', () => {
   const sw = read('service-worker.js');
   assert.match(sw, /'\.\/src\/print-pdf\.js'/, '電波の無い場所でPDFが作れなくなる');
+});
+
+test('点（POINT）が、PDFにも塗られた丸として出る', () => {
+  const area = { minX: 0, minY: 0, maxX: 100, maxY: 100 };
+  const 図面 = {
+    units: 'mm', bounds: area, contentBounds: area, layers: [],
+    entities: [{ type: 'point', layer: '0', color: '#000000', x: 50, y: 50 }],
+    unsupported: { count: 0, kinds: {} }, source: 'dxf',
+  };
+  const r = createPrintPdf(図面, area);
+  assert.ok(!r.error, r.error);
+  assert.equal(r.drawn, 1, '点がPDFに出ていない');
+  const t = 文字にする(r.bytes);
+  assert.match(t, / c\n?.* f/s, '塗りつぶしの丸になっていない');
+});
+
+test('範囲の外の点は、PDFに入れない', () => {
+  const area = { minX: 0, minY: 0, maxX: 100, maxY: 100 };
+  const 図面 = {
+    units: 'mm', bounds: area, contentBounds: area, layers: [],
+    entities: [
+      { type: 'point', layer: '0', color: '#000000', x: 50, y: 50 },
+      { type: 'point', layer: '0', color: '#000000', x: 99999, y: 99999 },
+    ],
+    unsupported: { count: 0, kinds: {} }, source: 'dxf',
+  };
+  const r = createPrintPdf(図面, area);
+  assert.equal(r.drawn, 1, '遠くの点まで持っていっている');
 });

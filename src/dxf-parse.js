@@ -19,6 +19,12 @@ import {
   rgbToCss,
   normalizeAngle,
 } from './drawing.js';
+import {
+  arcPoints,
+  ellipseArcPoints,
+  bulgePoints,
+  hatchToLines,
+} from './hatch.js';
 
 // ============================================================
 // 文字コードの変換（バイト列 → 文字列）
@@ -949,6 +955,206 @@ function convertOldPolyline(headerRec, vertexRecs, drawing, ctx, layerColorMap) 
 }
 
 // SOLID：4点。3点目と4点目が同じなら三角形（開発ルールの指示どおり）
+/**
+ * HATCH（ハッチング）の中身を読み解く（開発ルール38章）。
+ *
+ * グループコードは**並び順に意味がある**ので、上から順に歩いて読む。
+ *   91 … 囲いの数。そのあと囲いの数だけ「92から始まるかたまり」が続く
+ *   78 … 模様の線の種類の数。そのあとその数だけ 53/43/44/45/46/79/49 が続く
+ *
+ * @returns {{solid:boolean, paths:Array, patternLines:Array}}
+ */
+function parseHatchGroups(g) {
+  let i = 0;
+  let solid = false;
+  let nPaths = 0;
+  const paths = [];
+  const patternLines = [];
+
+  // --- 先頭の設定 ---
+  for (; i < g.length; i++) {
+    const [c, v] = g[i];
+    if (c === 70) solid = num(v, 0) === 1;
+    if (c === 91) { nPaths = num(v, 0); i++; break; }
+  }
+
+  // --- 囲い ---
+  for (let p = 0; p < nPaths && i < g.length; p++) {
+    while (i < g.length && g[i][0] !== 92) i++;
+    if (i >= g.length) break;
+    const flags = num(g[i][1], 0);
+    i++;
+    const pts = [];
+
+    if ((flags & 2) === 2) {
+      // 折れ線の囲い（ふくらみが付くことがある）
+      let closed = false;
+      let nVerts = 0;
+      while (i < g.length) {
+        const [c, v] = g[i];
+        if (c === 73) { closed = num(v, 0) === 1; i++; continue; }
+        if (c === 93) { nVerts = num(v, 0); i++; break; }
+        if (c === 72) { i++; continue; }
+        i++;
+      }
+      const verts = [];
+      for (let k = 0; k < nVerts && i < g.length; k++) {
+        while (i < g.length && g[i][0] !== 10) i++;
+        if (i >= g.length) break;
+        const x = num(g[i][1], 0);
+        i++;
+        let y = 0;
+        let bulge = 0;
+        if (i < g.length && g[i][0] === 20) { y = num(g[i][1], 0); i++; }
+        if (i < g.length && g[i][0] === 42) { bulge = num(g[i][1], 0); i++; }
+        verts.push([x, y, bulge]);
+      }
+      for (let k = 0; k < verts.length; k++) {
+        const a = verts[k];
+        const b = verts[(k + 1) % verts.length];
+        const 最後 = k === verts.length - 1;
+        if (最後 && !closed) { pts.push([a[0], a[1]]); break; }
+        if (a[2]) pts.push(...bulgePoints(a[0], a[1], b[0], b[1], a[2]));
+        else pts.push([a[0], a[1]]);
+      }
+    } else {
+      // 辺をひとつずつ並べた囲い
+      let nEdges = 0;
+      while (i < g.length && g[i][0] !== 93) i++;
+      if (i < g.length) { nEdges = num(g[i][1], 0); i++; }
+
+      for (let e = 0; e < nEdges && i < g.length; e++) {
+        while (i < g.length && g[i][0] !== 72) i++;
+        if (i >= g.length) break;
+        const 辺の種類 = num(g[i][1], 0);
+        i++;
+
+        const 値 = {};
+        const 点たち = [];
+        while (i < g.length && g[i][0] !== 72 && g[i][0] !== 97 && g[i][0] !== 92) {
+          const [c, v] = g[i];
+          if (c === 10) 点たち.push([num(v, 0), 0]);
+          else if (c === 20 && 点たち.length) 点たち[点たち.length - 1][1] = num(v, 0);
+          if (値[c] === undefined) 値[c] = num(v, 0);
+          i++;
+        }
+
+        if (辺の種類 === 1) {
+          // 直線：始まりと終わり
+          pts.push([値[10] || 0, 値[20] || 0]);
+          pts.push([値[11] || 0, 値[21] || 0]);
+        } else if (辺の種類 === 2) {
+          // 円弧：中心・半径・角度
+          pts.push(
+            ...arcPoints(値[10] || 0, 値[20] || 0, 値[40] || 0, 値[50] || 0, 値[51] || 0, 値[73] !== 0)
+          );
+        } else if (辺の種類 === 3) {
+          // 楕円弧：中心・長いほうの軸の先端・比・角度
+          pts.push(
+            ...ellipseArcPoints(
+              値[10] || 0, 値[20] || 0, 値[11] || 0, 値[21] || 0,
+              値[40] || 1, 値[50] || 0, 値[51] || 0, 値[73] !== 0
+            )
+          );
+        } else {
+          // スプライン（なめらかな曲線）。ここでは通る点をつないだ折れ線で代用する。
+          // 正確ではないが、**囲いの形としてはほぼ同じ**になる
+          for (const q of 点たち) pts.push([q[0], q[1]]);
+        }
+      }
+    }
+
+    if (pts.length >= 3) paths.push(pts);
+
+    // 97（もとの図形の数）と、そのあとの参照を飛ばす
+    while (i < g.length && g[i][0] !== 92 && g[i][0] !== 75 && g[i][0] !== 78) i++;
+  }
+
+  // --- 模様の決まり ---
+  let nPattern = 0;
+  for (let k = 0; k < g.length; k++) {
+    if (g[k][0] === 78) { nPattern = num(g[k][1], 0); i = k + 1; break; }
+  }
+  for (let p = 0; p < nPattern && i < g.length; p++) {
+    while (i < g.length && g[i][0] !== 53) i++;
+    if (i >= g.length) break;
+    const line = { angleDeg: num(g[i][1], 0), baseX: 0, baseY: 0, offsetAlong: 0, offsetAcross: 0, dashes: [] };
+    i++;
+    let 破線の数 = 0;
+    while (i < g.length && g[i][0] !== 53) {
+      const [c, v] = g[i];
+      if (c === 43) line.baseX = num(v, 0);
+      else if (c === 44) line.baseY = num(v, 0);
+      else if (c === 45) line.offsetAlong = num(v, 0);
+      else if (c === 46) line.offsetAcross = num(v, 0);
+      else if (c === 79) 破線の数 = num(v, 0);
+      else if (c === 49 && line.dashes.length < 破線の数) line.dashes.push(num(v, 0));
+      else if (c === 47 || c === 98) break; // 模様の並びはここで終わり
+      i++;
+    }
+    patternLines.push(line);
+  }
+
+  return { solid, paths, patternLines };
+}
+
+/**
+ * HATCH を、ふつうの線に直して図面に足す（開発ルール38章）。
+ *
+ * - 模様（斜線など）… 囲いの中だけに線を引く
+ * - べた塗り        … 塗りつぶす仕組みが無いので、囲いの形だけ描く
+ *                     （SOLIDと同じ扱い。開発ルール38.3）
+ */
+function convertHatch(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const layer = effectiveLayer(g, ctx);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const flip = isExtrusionFlippedX(g);
+
+  const { solid, paths, patternLines } = parseHatchGroups(g);
+  if (paths.length === 0) {
+    // 囲いが無いハッチング（他の図形にぶら下がっているだけのもの）。
+    // 描くものが無いので、**「表示できませんでした」とは数えない**（開発ルール23章）。
+    return true;
+  }
+
+  const 向きを直す = (pts) => pts.map(([x, y]) => [flipXIf(flip, x), y]);
+
+  if (solid || patternLines.length === 0) {
+    // べた塗りは、囲いの形だけ描く（SOLIDと同じ）
+    for (const path of paths) {
+      emitPolyline(drawing, ctx, layer, color, 向きを直す(path), true);
+    }
+    return true;
+  }
+
+  const lines = hatchToLines(paths.map(向きを直す), patternLines);
+  for (const [x1, y1, x2, y2] of lines) {
+    emitLine(drawing, ctx, layer, color, x1, y1, x2, y2);
+  }
+  // 囲いそのものは、CADでは線として出ないので描かない（境界は別の図形が持っている）
+  return true;
+}
+
+/**
+ * POINT（点）を図面に足す。
+ *
+ * CADの設定 $PDMODE が 0 のとき、点は**小さな丸**として表示される
+ * （実物の図面で確認した）。このアプリでも同じように小さな丸を出す。
+ * 大きさは線の太さに合わせるので、拡大しても紙に出しても、ちょうどよい大きさになる。
+ */
+function convertPoint(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const layer = effectiveLayer(g, ctx);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const flip = isExtrusionFlippedX(g);
+  const x = flipXIf(flip, num(firstValue(g, 10)));
+  const y = num(firstValue(g, 20));
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  const [X, Y] = applyMatrix(ctx.transform, x, y);
+  drawing.entities.push({ type: 'point', layer, color, x: X, y: Y });
+}
+
 function convertSolid(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
   const flip = isExtrusionFlippedX(g);
@@ -1156,6 +1362,11 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
         convertMText(rec, drawing, ctx, layerColorMap);
       } else if (rec.type === 'SOLID') {
         convertSolid(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'HATCH') {
+        convertHatch(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'POINT' && !ctx.insideDimension) {
+        // 寸法の中の点は下で外している。ここは図面に置かれたふつうの点
+        convertPoint(rec, drawing, ctx, layerColorMap);
       } else if (rec.type === 'INSERT') {
         expandInsert(rec, drawing, ctx, blocks, layerColorMap);
       } else if (rec.type === 'DIMENSION') {
@@ -1173,7 +1384,7 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
         // **本当に足りていない図形が埋もれてしまいます。** そのため数えません。
         // 図面の見た目は何も変わりません。
       } else {
-        // SPLINE / ELLIPSE / HATCH / VIEWPORT / POINT など
+        // SPLINE / 3DFACE / MLINE など
         // → 開発ルール10.5：黙って捨てず、種類ごとに数える
         countUnsupported(drawing, rec.type || '不明');
       }

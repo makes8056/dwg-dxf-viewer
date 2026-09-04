@@ -33,6 +33,9 @@
 //              rx … 長いほうの半径   ry … 短いほうの半径
 //              rotation … 長いほうの軸が何度傾いているか（度）
 //              startAngle/endAngle … 楕円のどこからどこまで描くか（度）
+//   point    … 点              { x, y }
+//              CADの点（POINT）。$PDMODE=0 のとき、CADは小さな丸で表示する。
+//              大きさは持たない。描く側が線の太さに合わせて決める
 //   text     … 文字            { x, y, height, rotation, text, hAlign, vAlign }
 //              hAlign … 書き出す点の左端/中央/右端のどこに置くか left|center|right
 //              vAlign … 上/中/下のどこに置くか top|middle|bottom|alphabetic
@@ -44,7 +47,7 @@
 //   layer … レイヤー名（文字列）
 //   color … CSS の色文字列。**白い背景で見える色にすでに変換済み**（下の aciToCss を参照）
 // ------------------------------------------------------------
-export const ENTITY_TYPES = ['line', 'polyline', 'arc', 'circle', 'ellipse', 'text'];
+export const ENTITY_TYPES = ['line', 'polyline', 'arc', 'circle', 'ellipse', 'text', 'point'];
 
 // ------------------------------------------------------------
 // 色の変換
@@ -311,6 +314,9 @@ export function computeBounds(entities) {
         // きっちり計算する式もあるが、傾いた楕円だと複雑になるうえ、
         // 用途（全体表示と、画面の外にあるかの判定）には点を拾えば十分。
         for (const p of ellipsePoints(e)) put(p[0], p[1]);
+        break;
+      case 'point':
+        put(e.x, e.y);
         break;
       case 'text':
         // 文字は、書き出しの点と、おおよその文字幅ぶんを範囲に入れる。

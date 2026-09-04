@@ -27,6 +27,7 @@ function makeFakeCtx(pixelWidth, pixelHeight) {
     restore: record('restore'),
     setTransform: record('setTransform'),
     fillRect: record('fillRect'),
+    fill: record('fill'),
     rect: record('rect'),
     clip: record('clip'),
     beginPath: record('beginPath'),
