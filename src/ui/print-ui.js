@@ -30,6 +30,13 @@
 //   そこで拡大縮小の前に四角を図面の座標へ直し、あとで画面の座標へ戻している。
 //   図面の座標との行き来は、決まりどおり viewport.js に任せる（10.6）。
 //   ここでは呼び出し側（app.js）からもらった toDrawing / toScreen を使うだけ。
+//
+// 【パソコンでも図面を動かせる（v0.2.6／開発ルール33章）】
+//   パソコンには指2本が無い。マウスの左ボタンで引っぱるのは「範囲を囲む」なので、
+//   **図面を動かす手が1つも無かった**（実機で判明）。そこで次の2つを足した。
+//     - ホイールボタンを押したまま動かす（AutoCADと同じ）
+//     - Shiftキーを押しながら動かす（ホイールボタンが無いとき）
+//   拡大縮小はホイールを回す（今までどおり）。
 
 // ------------------------------------------------------------
 // 四角を直す計算（画面に触らない。ここだけで試験できる）
@@ -246,6 +253,30 @@ export function moveRect(rect, dx, dy, bounds = null) {
 // ここから下は画面（DOM）を作る部分
 // ------------------------------------------------------------
 
+/**
+ * 指で触る機械（iPadなど）かどうか。
+ * 案内の文を出し分けるためだけに使う（開発ルール33.3）。
+ * パソコンの人に「2本指で」と書いても分からないし、
+ * iPadの人に「ホイールで」と書いても分からない。
+ *
+ * 分からない環境では、指で触る機械として扱う（このアプリはiPadが主なため）。
+ */
+function 指で触る機械か() {
+  try {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true;
+    return window.matchMedia('(pointer: coarse)').matches;
+  } catch (err) {
+    return true;
+  }
+}
+
+/** 図面を動かす・拡大縮小するやり方の案内（機械によって変える）。 */
+function 動かし方の案内() {
+  return 指で触る機械か()
+    ? '2本指で図面を拡大・縮小できます'
+    : 'ホイールで拡大縮小、ホイールを押したまま（またはShiftを押しながら）動かすと移動できます';
+}
+
 /** 大きさを画面のピクセル数の文字にする（開発ルール26.2：縮尺は出さない。ピクセル数でよい）。 */
 function formatSizeText(width, height) {
   return `横${Math.round(width)}×縦${Math.round(height)}`;
@@ -287,6 +318,7 @@ export function createPrintUi(canvasEl, handlers = {}) {
   // 'adjusting' … つまみをつまんで、大きさを直している最中
   // 'moving'    … 四角の中を押したまま、範囲ごと動かしている最中
   // 'pinching'  … 指2本で、図面そのものを拡大縮小・移動している最中
+  // 'panning'   … マウスで、図面そのものを動かしている最中（パソコン用）
   let phase = 'ready';
 
   let activePointerId = null;
@@ -295,6 +327,7 @@ export function createPrintUi(canvasEl, handlers = {}) {
   let adjustHandle = null; // つまんでいるつまみの名前
   let grabOffset = { x: 0, y: 0 }; // つまんだ瞬間の、指とつまみのずれ
   let movePrev = null; // 範囲ごと動かすときの、前回の指の位置
+  let panPrev = null; // マウスで図面を動かすときの、前回のマウスの位置
   // 指で囲んだ・つまんで直した直後の四角（画面の大きさ）。
   // 拡大縮小では更新しない。「指が滑っただけか」の判定に使う（32.3）。
   let lastUserSizedRect = null;
@@ -343,11 +376,11 @@ export function createPrintUi(canvasEl, handlers = {}) {
     ).join('');
 
     board.innerHTML = `
-      <p class="pr-guide">印刷したい範囲を指でなぞって囲んでください<br><span class="pr-guide-sub">2本指で図面を拡大・縮小できます</span></p>
+      <p class="pr-guide">印刷したい範囲を指でなぞって囲んでください<br><span class="pr-guide-sub">${動かし方の案内()}</span></p>
       <div class="pr-select" hidden>${handlesHtml}</div>
       <div class="pr-dim" hidden></div>
       <div class="pr-actions" hidden>
-        <p class="pr-hint">丸をつまむと大きさを直せます。四角の中を押したまま動かすと、範囲ごと動かせます。<br>2本指で図面を拡大・縮小できます（範囲は図面についてきます）。</p>
+        <p class="pr-hint">丸をつまむと大きさを直せます。四角の中を押したまま動かすと、範囲ごと動かせます。<br>${動かし方の案内()}（範囲は図面についてきます）。</p>
         <button type="button" class="pr-btn pr-btn-print">この範囲を印刷</button>
         <div class="pr-actions-row">
           <button type="button" class="pr-btn pr-btn-retry">囲み直す</button>
@@ -595,9 +628,46 @@ export function createPrintUi(canvasEl, handlers = {}) {
     lastPinchDist = pinchDistance(pts[0], pts[1]);
   }
 
+  /** 図面を動かす操作（ピンチ・マウスでの移動）が終わったときの後始末。 */
+  function endViewGesture() {
+    lastPinchMid = null;
+    lastPinchDist = null;
+    panPrev = null;
+    // 拡大縮小では四角の大きさを決め直していないので、指で決めた扱いにはしない（32.3）
+    if (currentRect) {
+      settle(currentRect, false);
+    } else {
+      phase = 'ready';
+      hideRect();
+      hideActions();
+    }
+  }
+
+  /**
+   * マウスで「図面を動かす」操作かどうか（パソコン用。開発ルール33章）。
+   *   ホイールボタンを押したまま動かす … AutoCADと同じ操作
+   *   Shiftキーを押しながら動かす     … ホイールボタンが無いとき
+   * 左ボタンだけで引っぱるのは「範囲を囲む」なので、そこは変えない。
+   */
+  function isMousePan(ev) {
+    return ev.pointerType === 'mouse' && (ev.button === 1 || ev.shiftKey);
+  }
+
   function onPointerDown(ev) {
     // ボタンの箱の上を押したときは、なぞり操作として扱わない（ボタン自身の click に任せる）。
     if (ev.target.closest('.pr-actions')) return;
+
+    // パソコン：図面を動かす（33章）
+    if (isMousePan(ev)) {
+      // ホイールボタンの既定の動き（自動スクロール）を止める
+      ev.preventDefault();
+      beginPointer(ev);
+      panPrev = { x: ev.clientX, y: ev.clientY };
+      phase = 'panning';
+      return;
+    }
+    // 右ボタンなどでは、範囲を囲み始めない
+    if (ev.pointerType === 'mouse' && ev.button !== 0) return;
 
     pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
 
@@ -641,6 +711,18 @@ export function createPrintUi(canvasEl, handlers = {}) {
   }
 
   function onPointerMove(ev) {
+    // パソコン：図面を動かす（33章）
+    if (phase === 'panning' && ev.pointerId === activePointerId) {
+      const dx = ev.clientX - panPrev.x;
+      const dy = ev.clientY - panPrev.y;
+      panPrev = { x: ev.clientX, y: ev.clientY };
+      if ((dx !== 0 || dy !== 0) && handlers.onPan) {
+        // 四角は図面に貼り付けたまま動かす（32.2）
+        moveView(() => handlers.onPan(dx, dy));
+      }
+      return;
+    }
+
     if (!pointers.has(ev.pointerId)) return;
     pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
 
@@ -700,22 +782,21 @@ export function createPrintUi(canvasEl, handlers = {}) {
   }
 
   function onPointerUp(ev) {
+    // パソコン：図面を動かし終わった（33章）
+    if (phase === 'panning' && ev.pointerId === activePointerId) {
+      releaseCapture(ev.pointerId);
+      activePointerId = null;
+      endViewGesture();
+      return;
+    }
+
     const いた = pointers.delete(ev.pointerId);
     if (!いた) return;
 
     // 指2本 → 1本以下。拡大縮小は終わり。
     // 残った指はそのまま置いておく（続けて囲み始めたりはしない）。
     if (phase === 'pinching') {
-      if (pointers.size < 2) {
-        lastPinchMid = null;
-        lastPinchDist = null;
-        if (currentRect) settle(currentRect, false);
-        else {
-          phase = 'ready';
-          hideRect();
-          hideActions();
-        }
-      }
+      if (pointers.size < 2) endViewGesture();
       return;
     }
 
@@ -738,19 +819,17 @@ export function createPrintUi(canvasEl, handlers = {}) {
 
   /** 指を離し忘れた・画面の外へ出た（pointercancel）ときの事故対策。gestures.js と同じ考え方。 */
   function onPointerCancel(ev) {
+    if (phase === 'panning' && ev.pointerId === activePointerId) {
+      releaseCapture(ev.pointerId);
+      activePointerId = null;
+      endViewGesture();
+      return;
+    }
+
     pointers.delete(ev.pointerId);
 
     if (phase === 'pinching') {
-      if (pointers.size < 2) {
-        lastPinchMid = null;
-        lastPinchDist = null;
-        if (currentRect) settle(currentRect, false);
-        else {
-          phase = 'ready';
-          hideRect();
-          hideActions();
-        }
-      }
+      if (pointers.size < 2) endViewGesture();
       return;
     }
 
@@ -853,6 +932,7 @@ export function createPrintUi(canvasEl, handlers = {}) {
     adjustHandle = null;
     movePrev = null;
     pointers.clear();
+    panPrev = null;
     lastPinchMid = null;
     lastPinchDist = null;
     rectBeforeGesture = null;

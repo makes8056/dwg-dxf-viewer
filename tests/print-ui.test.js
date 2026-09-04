@@ -390,3 +390,72 @@ test('2本指の説明が、画面に出ている', () => {
   const js = read('src/ui/print-ui.js');
   assert.match(js, /2本指で図面を拡大・縮小できます/, '案内が無い');
 });
+
+// ============================================================
+// パソコンでも図面を動かせる（v0.2.6／開発ルール33章）
+// ============================================================
+
+test('パソコンでも、図面を動かす手が用意してある', () => {
+  // 【実機で見つかった不具合】
+  // パソコンには指2本が無い。左ボタンで引っぱるのは「範囲を囲む」なので、
+  // 拡大縮小はできるのに**図面を動かす手が1つも無かった。**
+  const js = read('src/ui/print-ui.js');
+  const i = js.indexOf('function isMousePan');
+  assert.ok(i >= 0, 'マウスで図面を動かす判定が無い');
+  const body = js.slice(i, js.indexOf('\n  }\n', i));
+  assert.match(body, /button === 1/, 'ホイールボタンで動かせない（AutoCADと同じ操作）');
+  assert.match(body, /shiftKey/, 'Shiftキーで動かせない（ホイールボタンが無いとき用）');
+  assert.match(js, /'panning'/, '図面を動かしている最中の状態が無い');
+});
+
+test('マウスで図面を動かしても、四角は図面についてくる', () => {
+  // 拡大縮小のときと同じ。ここを忘れると、動かしたぶんだけ印刷位置がずれる
+  const js = read('src/ui/print-ui.js');
+  const i = js.indexOf("if (phase === 'panning' && ev.pointerId === activePointerId)");
+  assert.ok(i >= 0, 'マウスで動かす処理が無い');
+  // この if の中だけを見る（あとに出てくるピンチの処理を巻き込まないように）
+  const body = js.slice(i, js.indexOf('\n    }\n', i));
+  assert.match(body, /handlers\.onPan/, '図面を動かしていない');
+  assert.match(body, /moveView\(/, '四角を図面に貼り付け直していない');
+});
+
+test('マウスの左ボタンは、今までどおり「範囲を囲む」', () => {
+  // ここを変えると、囲めなくなる
+  const js = read('src/ui/print-ui.js');
+  assert.match(
+    js,
+    /ev\.pointerType === 'mouse' && ev\.button !== 0/,
+    '左ボタン以外を除けていない（右クリックで囲み始めてしまう）'
+  );
+});
+
+test('図面を動かし終わったときの後始末が、1か所にまとまっている', () => {
+  // ピンチとマウスで別々に書くと、片方だけ直し忘れる
+  const js = read('src/ui/print-ui.js');
+  assert.match(js, /function endViewGesture/, '後始末が1か所にまとまっていない');
+  const i = js.indexOf('function endViewGesture');
+  const body = js.slice(i, js.indexOf('\n  }\n', i));
+  assert.match(body, /panPrev = null/, 'マウスの位置を消していない');
+  assert.match(body, /settle\(currentRect, false\)/, '囲んだときの大きさを上書きしている');
+});
+
+test('操作の案内を、使っている機械に合わせて出し分けている', () => {
+  // パソコンの人に「2本指で」と書いても分からない（開発ルール33.3）
+  const js = read('src/ui/print-ui.js');
+  const i = js.indexOf('function 動かし方の案内');
+  assert.ok(i >= 0, '案内の出し分けが無い');
+  const body = js.slice(i, js.indexOf('\n}\n', i));
+  assert.match(body, /2本指/, '指で触る機械むけの案内が無い');
+  assert.match(body, /ホイール/, 'パソコンむけの案内が無い');
+  assert.match(js, /pointer: coarse/, '機械の見分け方が無い');
+});
+
+test('機械の見分けに失敗しても落ちない', () => {
+  // matchMedia が無い・例外を投げる環境でも、案内が出せないだけで動くこと
+  const js = read('src/ui/print-ui.js');
+  const i = js.indexOf('function 指で触る機械か');
+  assert.ok(i >= 0, '見分ける処理が無い');
+  const body = js.slice(i, js.indexOf('\n}\n', i));
+  assert.match(body, /try\s*\{/, '例外を受け止めていない');
+  assert.match(body, /matchMedia !== 'function'/, 'matchMedia が無い環境を見ていない');
+});
