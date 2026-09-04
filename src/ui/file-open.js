@@ -2,7 +2,7 @@
 //
 // iPadのファイルアプリ／iCloudから .dxf .dwg を選んでもらい、
 //   .dxf → decodeDxfBuffer() で文字コードを直す → parseDxf() で図形データにする
-//   .dwg → まだ対応していない（案内メッセージを出す）
+//   .dwg → src/dwg-parse.js に渡す（DXFに変換してから読む。開発ルール35章）
 // までをこのファイルの中で行う。
 //
 // src/dxf-parse.js は、実際にファイルが選ばれたときに読み込む（動的読み込み）。
@@ -103,6 +103,43 @@ async function handleFile(file, handlers) {
  * @param {object} handlers setupFileOpen() に渡したものと同じ
  * @param {object} [options] { alreadyStarted } 「読み込み中…」をすでに出してあるか
  */
+/**
+ * DWGを開く（開発ルール35章）。
+ *
+ * 【DXFと分けてある理由】
+ * DWGを読む部品（LibreDWG）は約10MBある。アプリ本体といっしょに読み込むと、
+ * DXFしか使わない人にも毎回10MBを背負わせることになる。
+ * そこで **DWGを開こうとした、そのときだけ** 読み込む。
+ *
+ * @param {string} name ファイル名
+ * @param {ArrayBuffer} buffer ファイルの中身
+ * @param {object} handlers setupFileOpen() に渡したものと同じ
+ */
+async function openDwgBuffer(name, buffer, handlers) {
+  let dwgModule;
+  try {
+    dwgModule = await import('../dwg-parse.js');
+  } catch (err) {
+    handlers.onLoadError && handlers.onLoadError(
+      'DWGを読む部品を用意できませんでした。通信が切れている可能性があります。\n' +
+        '一度ページを開き直してから、もう一度お試しください。'
+    );
+    return;
+  }
+
+  try {
+    const drawing = await dwgModule.parseDwg(buffer, {
+      onProgress: (message) => handlers.onProgress && handlers.onProgress(message),
+    });
+    handlers.onLoadSuccess && handlers.onLoadSuccess(drawing, name, buffer);
+  } catch (err) {
+    // dwg-parse.js は、そのまま画面に出せる日本語の理由をつけて投げてくる
+    handlers.onLoadError && handlers.onLoadError(
+      (err && err.message) || `「${name}」を読み込めませんでした。`
+    );
+  }
+}
+
 async function openDrawingBuffer(name, buffer, handlers, options = {}) {
   const dot = name.lastIndexOf('.');
   const ext = dot >= 0 ? name.slice(dot).toLowerCase() : '';
@@ -124,9 +161,7 @@ async function openDrawingBuffer(name, buffer, handlers, options = {}) {
   // DWGは先頭に「AC1015」のような目印が入っている
   const looksLikeDwg = /^AC10\d\d/.test(head);
   if (ext === '.dwg' || looksLikeDwg) {
-    handlers.onLoadError && handlers.onLoadError(
-      'DWGは次の段階で対応します。今はCADで「DXF形式」で保存し直したものをお使いください。'
-    );
+    await openDwgBuffer(name, buffer, handlers);
     return;
   }
 

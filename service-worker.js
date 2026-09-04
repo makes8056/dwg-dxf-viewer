@@ -18,9 +18,37 @@
 // 【重要】新しい版を配布するときは、このCACHE_VERSIONを必ず変更すること。
 // 変更しないと、ファイルの中身を更新してもservice-worker.js自体のバイト列が変わらない場合
 // ブラウザが「更新なし」と判断し、新しい内容がキャッシュされないことがある。
-const CACHE_VERSION = 'v0.2.6'; // 配布のたびに更新。src/version.jsのAPP_VERSIONと手動で合わせる運用
+const CACHE_VERSION = 'v0.3.0'; // 配布のたびに更新。src/version.jsのAPP_VERSIONと手動で合わせる運用
 // （このファイルはクラシックスクリプトとして登録しているためimportできず、自動連動はできない）
 const CACHE_NAME = `dxf-viewer-shell-${CACHE_VERSION}`;
+
+// ------------------------------------------------------------
+// 【DWGを読む部品は、別枠でしまう（開発ルール35.3）】
+//
+// DWGを読む部品（vendor/libredwg）は約10MBある。これをアプリ本体と
+// いっしょに事前キャッシュすると、次の2つの困ったことが起きる。
+//
+//   1. アプリを更新するたびに、10MBを読み直すことになる
+//      （キャッシュ名に版番号が入っているため、まるごと入れ直しになる）
+//   2. 事前キャッシュは「1つでも失敗したら全部やり直し」の作り。
+//      10MBの読み込みが1回でも途切れると、**アプリの更新そのものが止まる**
+//
+// そこで、DWGの部品だけは
+//   - 事前キャッシュには入れない（アプリ本体は今までどおり軽いまま）
+//   - DWGを開こうとしたときに読み込み、この別枠にしまう
+//   - **アプリを更新しても消さない**（一度読み込めば、ずっと使える）
+// という扱いにする。
+//
+// 名前に入れるのは同梱した部品の版であって、アプリの版ではない。
+// 部品を新しくしたときだけ、ここを変える（そのとき古い枠は下で片付ける）。
+const DWG_ENGINE_VERSION = '0.7.10';
+const DWG_ENGINE_CACHE = `dxf-viewer-dwg-engine-${DWG_ENGINE_VERSION}`;
+const DWG_ENGINE_PATH = '/vendor/libredwg/';
+
+/** このリクエストは、DWGを読む部品のファイルか。 */
+function isDwgEngineRequest(url) {
+  return url.pathname.includes(DWG_ENGINE_PATH);
+}
 
 // アプリシェル一覧。新しいsrc配下のファイルを追加したら、ここにも必ず追加すること。
 // vendor/ と tests/ はまだ使っていない／アプリ本体ではないので入れない（司令塔の指示）。
@@ -33,6 +61,7 @@ const APP_SHELL_FILES = [
   './src/version.js',
   './src/drawing.js',
   './src/dxf-parse.js',
+  './src/dwg-parse.js',
   './src/viewport.js',
   './src/print-area.js',
   './src/render.js',
@@ -109,7 +138,13 @@ self.addEventListener('activate', (event) => {
       const keys = await caches.keys();
       await Promise.all(
         keys
-          .filter((key) => key.startsWith('dxf-viewer-shell-') && key !== CACHE_NAME)
+          .filter(
+            (key) =>
+              (key.startsWith('dxf-viewer-shell-') && key !== CACHE_NAME) ||
+              // DWGの部品は、**版が変わったときだけ**片付ける。
+              // アプリの更新では消さない（消すと10MBを読み直しになる。35.3）
+              (key.startsWith('dxf-viewer-dwg-engine-') && key !== DWG_ENGINE_CACHE)
+          )
           .map((key) => caches.delete(key))
       );
       await self.clients.claim();
@@ -124,12 +159,42 @@ self.addEventListener('message', (event) => {
   }
 });
 
+/**
+ * DWGを読む部品のファイルを返す（開発ルール35.3）。
+ *
+ * しまってあればそれを返す。無ければ取りに行き、うまく取れたらしまう。
+ * **しまうのに失敗しても、返すのは成功させる。**
+ * 容量がいっぱいでしまえなかっただけで、今回の表示まで巻き添えにしない。
+ */
+async function handleDwgEngineRequest(req) {
+  const cache = await caches.open(DWG_ENGINE_CACHE);
+  const cached = await cache.match(req, { ignoreSearch: true });
+  if (cached) return await toNonRedirectedResponse(cached);
+
+  const res = await fetch(req);
+  if (res && res.ok) {
+    const 保存用 = await toNonRedirectedResponse(res.clone());
+    try {
+      await cache.put(req, 保存用);
+    } catch (e) {
+      // 容量オーバーなど。次に開いたときにまた取りに行けばよい
+    }
+  }
+  return res;
+}
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return; // 書き込み系はそのまま素通し（このアプリはIndexedDBのみ使うため通常発生しない）
 
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // 他オリジンへのリクエストは扱わない
+
+  // DWGを読む部品は、別枠のしまい場所を使う（開発ルール35.3）
+  if (isDwgEngineRequest(url)) {
+    event.respondWith(handleDwgEngineRequest(req));
+    return;
+  }
 
   event.respondWith(
     (async () => {

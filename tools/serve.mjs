@@ -22,6 +22,7 @@ const TYPES = {
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
+  '.wasm': 'application/wasm',
   '.dxf': 'application/octet-stream',
   '.webmanifest': 'application/manifest+json',
 };

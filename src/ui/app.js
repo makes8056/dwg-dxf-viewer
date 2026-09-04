@@ -35,6 +35,12 @@ const versionBadge = document.getElementById('version-badge');
 const toolbarEl = document.getElementById('toolbar');
 
 const loadingOverlay = document.getElementById('loading-overlay');
+const loadingMessage = document.getElementById('loading-message');
+
+/** 「読み込み中…」の文字を変える。何を待っているのか分かるように（開発ルール35.4）。 */
+function setLoadingMessage(text) {
+  if (loadingMessage) loadingMessage.textContent = text;
+}
 
 const prepareBanner = document.getElementById('prepare-banner');
 
@@ -365,10 +371,14 @@ browserHintClose.addEventListener('click', () => {
 const fileOpener = setupFileOpen({
   onLoadStart: () => {
     hideError();
+    setLoadingMessage('読み込み中…');
     loadingOverlay.hidden = false;
   },
+  // DWGは部品の読み込みに時間がかかる。何を待っているのかを出す（開発ルール35.4）
+  onProgress: (message) => { setLoadingMessage(message); },
   onLoadSuccess: (drawing, name, buffer) => {
     loadingOverlay.hidden = true;
+    setLoadingMessage('読み込み中…');
     currentDrawing = drawing;
     currentName = name || null;
 
@@ -398,6 +408,7 @@ const fileOpener = setupFileOpen({
   },
   onLoadError: (message) => {
     loadingOverlay.hidden = true;
+    setLoadingMessage('読み込み中…');
     showError(message);
   },
 });

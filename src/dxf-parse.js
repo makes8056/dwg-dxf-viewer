@@ -288,7 +288,9 @@ function parseLayerTable(pairs, i, layers) {
         // 図形の側（getLayerName）も取り除いた名前で引くので、両方そろえないと
         // **色も表示・非表示も引けなくなる**（図面が真っ黒になる／消えるはずのものが出る）。
         const key = String(name).trim();
-        layers.set(key, { name: key, color, visible });
+        // off と frozen を分けて覚えておく。
+        // あとで「全部のレイヤーが非表示」というありえない状態を直すのに使う（34章）
+        layers.set(key, { name: key, color, visible, off: isOff, frozen: isFrozen });
       }
       i = rec.nextIndex;
       continue;
@@ -296,6 +298,35 @@ function parseLayerTable(pairs, i, layers) {
     i++;
   }
   return i;
+}
+
+/**
+ * 【全部のレイヤーが「非表示」になっている図面を直す（開発ルール34章）】
+ *
+ * DXFでは、レイヤーの色番号（62）がマイナスなら「そのレイヤーは非表示」という決まり。
+ * ところが**DWGから変換したDXFでは、全部のレイヤーの色がマイナスで出てくる。**
+ *
+ *   同じ図面で実際に比べた結果：
+ *     AutoCADが書き出したDXF … 0番=7  DIM=3  PIPE=1  （全部プラス）
+ *     DWGから変換したDXF     … 0番=-7 DIM=-3 PIPE=-1（全部マイナス。色の値は同じ）
+ *
+ * 全部のレイヤーが非表示の図面は**ありえない**（何も映らない紙と同じ）。
+ * そういうときは、マイナスの符号は当てにならないと判断して、表示扱いに戻す。
+ *
+ * 一部だけマイナスなら、それは本当に消してあるレイヤーなので、そのまま尊重する。
+ *
+ * 凍結（FROZEN・コード70の1のビット）は別の情報なので、こちらは必ず尊重する。
+ */
+function fixAllLayersOff(layers) {
+  const list = Array.from(layers.values());
+  if (list.length === 0) return;
+  // 混ざっているなら、その情報は正しい。触らない
+  if (!list.every((layer) => layer.off)) return;
+
+  for (const layer of list) {
+    layer.off = false;
+    layer.visible = !layer.frozen;
+  }
 }
 
 function parseBlocksSection(pairs, i, blocks) {
@@ -1181,6 +1212,8 @@ export function parseDxf(text) {
   }
 
   const { layers, blocks, topEntityRecords } = sections;
+  // 図形を組み立てる前に直すこと。あとからでは、消された図形は戻らない（34章）
+  fixAllLayersOff(layers);
   drawing.layers = Array.from(layers.values());
 
   const rootCtx = {

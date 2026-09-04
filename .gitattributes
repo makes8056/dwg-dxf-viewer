@@ -2,3 +2,6 @@
 * text=auto eol=lf
 # 図面の見本ファイルは中身を変えない
 *.dxf -text
+# WebAssembly（DWGを読む部品）は1バイトも変えてはいけない。
+# 改行コードを変換されると壊れて動かなくなる。
+*.wasm binary
