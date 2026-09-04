@@ -447,13 +447,22 @@ test('操作の案内を、使っている機械に合わせて出し分けて�
   const body = js.slice(i, js.indexOf('\n}\n', i));
   assert.match(body, /2本指/, '指で触る機械むけの案内が無い');
   assert.match(body, /ホイール/, 'パソコンむけの案内が無い');
-  assert.match(js, /pointer: coarse/, '機械の見分け方が無い');
+  assert.match(body, /isTouchDevice\(\)/, '機械の見分けを使っていない');
+});
+
+test('機械の見分けは1か所にまとまっている', () => {
+  // 同じ判定をあちこちに書くと、片方だけ直したときに必ず食い違う（開発ルール2.2）
+  const dev = read('src/ui/device.js');
+  assert.match(dev, /export function isTouchDevice/, '見分ける処理が無い');
+  const ui = read('src/ui/print-ui.js');
+  assert.match(ui, /from '\.\/device\.js'/, 'device.js を使っていない');
+  assert.ok(!/matchMedia/.test(ui), 'print-ui.js が自分で見分けている');
 });
 
 test('機械の見分けに失敗しても落ちない', () => {
   // matchMedia が無い・例外を投げる環境でも、案内が出せないだけで動くこと
-  const js = read('src/ui/print-ui.js');
-  const i = js.indexOf('function 指で触る機械か');
+  const js = read('src/ui/device.js');
+  const i = js.indexOf('export function isTouchDevice');
   assert.ok(i >= 0, '見分ける処理が無い');
   const body = js.slice(i, js.indexOf('\n}\n', i));
   assert.match(body, /try\s*\{/, '例外を受け止めていない');

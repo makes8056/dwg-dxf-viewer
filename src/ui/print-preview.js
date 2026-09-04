@@ -23,6 +23,8 @@ const STYLE_ID = 'pv-style';
  * 印刷の確認画面を用意する。
  *
  * @param {object} handlers
+ *   onSave(blob, name)  … 「PDFで保存」が押された。
+ *                         こちらも**指で押した流れの中でそのまま呼ばれる**
  *   onPrint(blob, name) … 「プリント」が押された。
  *                         **指で押した流れの中でそのまま呼ばれる**ので、
  *                         受け取る側は待たずに共有メニューを開けます（開発ルール28.3）
@@ -55,6 +57,7 @@ export function createPrintPreview(handlers = {}) {
         <span class="pv-note"></span>
         <div class="pv-buttons">
           <button type="button" class="pv-cancel">やめる</button>
+          <button type="button" class="pv-save">PDFで保存</button>
           <button type="button" class="pv-print">プリント</button>
         </div>
       </div>
@@ -63,6 +66,7 @@ export function createPrintPreview(handlers = {}) {
   const img = overlay.querySelector('.pv-image');
   const note = overlay.querySelector('.pv-note');
   const printBtn = overlay.querySelector('.pv-print');
+  const saveBtn = overlay.querySelector('.pv-save');
 
   function hide() {
     if (!open) return;
@@ -89,6 +93,11 @@ export function createPrintPreview(handlers = {}) {
     handlers.onPrint && handlers.onPrint(currentBlob, currentName);
   });
 
+  // 保存も、押した流れの中でそのまま渡す（待ち時間を入れない。28.3と同じ理由）
+  saveBtn.addEventListener('click', () => {
+    handlers.onSave && handlers.onSave(currentBlob, currentName);
+  });
+
   ensureAttached(overlay);
 
   return {
@@ -104,6 +113,10 @@ export function createPrintPreview(handlers = {}) {
       // 【設定は標準のままでよい（開発ルール29章）】
       // 絵そのものがA4用紙1枚の形なので、プリント画面で紙の向きや拡大率を
       // いじる必要がない。触らせないほうが事故が減る。
+      // ボタンの名前は、実際に保存されるものに合わせる。
+      // PDFが作れなかったときは絵（PNG）になるので、そう書く（うそをつかない）
+      saveBtn.textContent = /\.pdf$/i.test(currentName) ? 'PDFで保存' : '画像で保存';
+
       const 向き = info.orientation === 'portrait' ? '縦向き' : '横向き';
       note.textContent =
         'A4' + 向き + 'いっぱいに印刷します。プリント画面の設定は、そのままでかまいません。';

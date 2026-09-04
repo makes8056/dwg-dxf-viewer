@@ -114,6 +114,7 @@
 }
 
 .pv-cancel,
+.pv-save,
 .pv-print {
   /* 指で押しやすい大きさを必ず確保（開発ルール11章） */
   min-width: 104px;
@@ -133,6 +134,17 @@
   color: #333333;
 }
 
+/* 「保存」は、印刷ほど目立たせない（押し間違えを減らす） */
+.pv-save {
+  background: #eef3fa;
+  color: #0b4da2;
+  font-weight: bold;
+}
+
+.pv-save:active {
+  background: #dbe6f5;
+}
+
 /* いちばん押してほしいボタンなので、はっきり目立たせる */
 .pv-print {
   background: #0b4da2;
@@ -150,9 +162,11 @@
     flex: 1 1 100%;
   }
   .pv-cancel,
+  .pv-save,
   .pv-print {
     flex: 1 1 0;
     min-width: 0;
+    padding: 0 8px;
   }
 }
 

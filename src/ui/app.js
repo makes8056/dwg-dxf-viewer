@@ -24,6 +24,7 @@ import { createPrintUi } from './print-ui.js';
 import { createPrintPreview } from './print-preview.js';
 import { createPrintImage, isAreaBigEnough } from '../print-area.js';
 import { createPrintPdf } from '../print-pdf.js';
+import { isApplePrintShareDevice } from './device.js';
 import { startUpdateCheck } from '../update-check.js';
 
 // ------------------------------------------------------------
@@ -512,7 +513,47 @@ const printUi = createPrintUi(canvas, {
 // 印刷される絵を、押す前に確認してもらう画面（開発ルール28.2）
 const printPreview = createPrintPreview({
   onPrint: (blob, name) => { handOverToPrint(blob, name); },
+  onSave: (blob, name) => { savePrintFile(blob, name); },
 });
+
+/**
+ * 作ったPDF（またはPNG）を、ファイルとして保存する（開発ルール37.4）。
+ *
+ * 印刷せずに、手元に残したり人に送ったりしたいことがある。
+ * PDFはもう作ってあるので、保存はそれを渡すだけ。
+ *
+ * iPadのSafariでは「ファイル」アプリに保存され、
+ * パソコンではダウンロードのフォルダーに入る。
+ *
+ * 【押した流れの中で終わらせること】待ち時間を入れると、
+ * ブラウザが「勝手なダウンロード」とみなして止めることがある（28.3と同じ理由）。
+ */
+function savePrintFile(blob, name) {
+  if (!blob) {
+    showError('保存するものがありません。もう一度範囲を囲んでください。');
+    return;
+  }
+  try {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name || '図面.pdf';
+    // Safariは、画面に置いてからでないと押せないことがある
+    a.style.cssText = 'position:fixed; left:-9999px; top:0;';
+    document.body.appendChild(a);
+    a.click();
+    // 【28.3】すぐ片付けない。保存が終わる前に消すと、途中で切れることがある
+    setTimeout(() => {
+      try { a.remove(); URL.revokeObjectURL(url); } catch (err) { /* 片付け損ねても害はない */ }
+    }, 60000);
+    printPreview.hide();
+  } catch (err) {
+    showError(
+      'ファイルを保存できませんでした。\n' +
+        '確認の画面の絵を長押しして「画像を保存」でも残せます。'
+    );
+  }
+}
 
 /**
  * 作った絵を、iPadに渡す（開発ルール28.2）。
@@ -525,9 +566,14 @@ const printPreview = createPrintPreview({
  * @param {string} name ファイル名
  */
 function handOverToPrint(blob, name) {
-  // 1. iPadなど：共有メニューへ渡す。そこから「プリント」を選んでもらう。
+  // 1. iPad：共有メニューへ渡す。そこから「プリント」を選んでもらう。
   //    ページを印刷しないので、**URL・日付・ページ番号は一切出ない。**
-  if (blob && typeof navigator.share === 'function') {
+  //
+  //    【パソコンでは、この道を通してはいけない（開発ルール37.2）】
+  //    Windowsにも共有メニューはあるが、**その中に「プリント」が無い。**
+  //    メールや近くの人への送信しか出ないので、渡しても印刷できない。
+  //    「共有できるかどうか」で判断すると、ここを間違える（実機で判明）。
+  if (blob && isApplePrintShareDevice() && typeof navigator.share === 'function') {
     // 種類（MIME）を間違えると、iPadが「プリント」を出さないことがある
     const 種類 = /\.pdf$/i.test(name) ? 'application/pdf' : 'image/png';
     const file = new File([blob], name, { type: 種類 });
@@ -547,9 +593,90 @@ function handOverToPrint(blob, name) {
     }
   }
 
-  // 2. パソコンなど、共有メニューが無い環境：これまでどおりページを印刷する。
+  // 2. パソコン：ブラウザの印刷画面を直接開く。
+  //    渡すのはPDFなので、URLも日付も入らない（36章）。
+  if (blob && /\.pdf$/i.test(name)) {
+    printPdfOnComputer(blob);
+    return;
+  }
+
+  // 3. PDFが作れなかったときの最後の道：これまでどおりページを印刷する。
   //    こちらはURLや日付が入ることがあるが、パソコンでは印刷設定で消せる。
   printFallbackViaPage();
+}
+
+/** パソコンで印刷するときに使う、見えない入れ物。使い回す。 */
+let pdfPrintFrame = null;
+
+/**
+ * パソコンで、PDFの印刷画面を直接開く（開発ルール37.3）。
+ *
+ * 見えない入れ物にPDFを読み込ませて、その中で印刷する。
+ * ページを印刷するのではないので、**URLも日付も入らない。**
+ *
+ * 【開発ルール28.3】印刷中に片付けようとしないこと。
+ * 入れ物は置いたままにして、次に印刷するときに中身を入れ替える。
+ * 片付けると、印刷画面で設定を変えたときに中身が消える。
+ *
+ * 印刷画面が開けなかったときは、**PDFを新しいタブに出す。**
+ * 何も起きないのがいちばん困る（26.7）。
+ */
+function printPdfOnComputer(blob) {
+  const url = URL.createObjectURL(blob);
+
+  if (!pdfPrintFrame) {
+    pdfPrintFrame = document.createElement('iframe');
+    pdfPrintFrame.setAttribute('aria-hidden', 'true');
+    pdfPrintFrame.setAttribute('title', '印刷用');
+    pdfPrintFrame.style.cssText =
+      'position:fixed; right:0; bottom:0; width:1px; height:1px; opacity:0; border:0;';
+    document.body.appendChild(pdfPrintFrame);
+  }
+
+  let 開けた = false;
+  const 別のやり方 = () => {
+    if (開けた) return;
+    開けた = true;
+    // 印刷画面を開けなかった。せめてPDFを出して、そこから印刷してもらう
+    const w = window.open(url, '_blank');
+    if (!w) {
+      showError(
+        '印刷の画面を開けませんでした。\n' +
+          'ブラウザが新しいタブを止めている可能性があります。\n' +
+          '設定でこのページのポップアップを許可してから、もう一度お試しください。'
+      );
+    }
+  };
+
+  const 印刷する = () => {
+    let w = null;
+    try {
+      w = pdfPrintFrame.contentWindow;
+    } catch (err) {
+      w = null;
+    }
+    if (!w || typeof w.print !== 'function') {
+      別のやり方();
+      return;
+    }
+    try {
+      w.focus();
+      w.print(); // 印刷画面が閉じるまで、ここで止まる
+      開けた = true;
+      printPreview.hide();
+    } catch (err) {
+      別のやり方();
+    }
+  };
+
+  pdfPrintFrame.onload = () => {
+    // 読み込み直後は、中のPDFがまだ出来上がっていないことがある。少しだけ待つ
+    setTimeout(印刷する, 300);
+  };
+  // 読み込みの合図が来ないまま終わる場合の保険
+  setTimeout(() => { if (!開けた) 別のやり方(); }, 4000);
+
+  pdfPrintFrame.src = url;
 }
 
 /**

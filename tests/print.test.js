@@ -200,12 +200,87 @@ test('確認画面は紙に出さない', () => {
 });
 
 test('確認画面のボタンは、指で押しやすい大きさ', () => {
-  // 手袋をしていても押せるように（開発ルール11章）
+  // 手袋をしていても押せるように（開発ルール11章）。
+  // ボタンが増えても、この大きさは必ず守ること
   const css = read('src/ui/print-preview.css');
-  const m = css.match(/\.pv-cancel,\s*\n\.pv-print\s*\{([\s\S]*?)\}/);
-  assert.ok(m, 'ボタンの指定が見つからない');
-  const h = m[1].match(/min-height\s*:\s*(\d+)px/);
+  const i = css.indexOf('.pv-cancel,');
+  assert.ok(i >= 0, 'ボタンの指定が見つからない');
+  const 中身 = css.slice(i, css.indexOf('}', i));
+  const h = 中身.match(/min-height\s*:\s*(\d+)px/);
   assert.ok(h && Number(h[1]) >= 44, `ボタンの高さが44px未満: ${h && h[1]}`);
+  // 3つのボタンすべてに、この大きさがかかっていること
+  for (const 名 of ['.pv-cancel', '.pv-save', '.pv-print']) {
+    assert.ok(中身.includes(名), `${名} に押しやすい大きさがかかっていない`);
+  }
+});
+
+test('パソコンでは、共有メニューへ渡さない（開発ルール37.2）', () => {
+  // 【実機で判明】Windowsにも共有メニューはあるが、**その中に「プリント」が無い。**
+  // メールや近くの人への送信しか出ないので、渡しても印刷できなかった。
+  // 「共有できるかどうか」で判断すると、ここを間違える。
+  const app = read('src/ui/app.js');
+  const i = app.indexOf('function handOverToPrint');
+  assert.ok(i >= 0, '渡す処理が見つからない');
+  const body = app.slice(i, app.indexOf('\n}\n', i));
+
+  const 共有の行 = body.split('\n').find((line) => /navigator\.share/.test(line) && /if\s*\(/.test(line));
+  assert.ok(共有の行, '共有メニューを使う条件が見つからない');
+  assert.match(
+    共有の行,
+    /isApplePrintShareDevice\(\)/,
+    'iPadかどうかを見ていない。パソコンでも共有メニューへ渡してしまう'
+  );
+});
+
+test('パソコンでは、PDFの印刷画面を直接開く', () => {
+  // 以前のように「押したら印刷画面が出る」形にする（ユーザーの要望）
+  const app = read('src/ui/app.js');
+  assert.match(app, /function printPdfOnComputer/, 'パソコン用の印刷処理が無い');
+  const i = app.indexOf('function printPdfOnComputer');
+  const body = app.slice(i, app.indexOf('\n}\n', i));
+  assert.match(body, /\.print\(\)/, '印刷画面を開いていない');
+  assert.match(body, /createElement\('iframe'\)/, 'PDFを読み込む入れ物が無い');
+  // 開けなかったときに、何も起きないままにしない（開発ルール26.7）
+  assert.match(body, /window\.open/, '開けなかったときの逃げ道が無い');
+});
+
+test('パソコン用の印刷でも、印刷中に片付けようとしない', () => {
+  // 【開発ルール28.3】片付けると、印刷画面で設定を変えたときに中身が消える
+  const app = read('src/ui/app.js');
+  const i = app.indexOf('function printPdfOnComputer');
+  const body = app.slice(i, app.indexOf('\n}\n', i));
+  assert.ok(
+    !/removeChild|\.remove\(\)/.test(body),
+    '印刷用の入れ物を片付けている。設定を変えると中身が消える'
+  );
+  assert.match(app, /let pdfPrintFrame = null/, '入れ物を使い回していない');
+});
+
+test('確認画面に「保存」がある', () => {
+  // 印刷せずに手元に残したい・人に送りたいことがある（開発ルール37.4）
+  const js = read('src/ui/print-preview.js');
+  // 画面に本当にボタンが置かれていること（名前が残っているだけではだめ）
+  assert.match(js, /<button[^>]*class="pv-save"[^>]*>/, '保存のボタンが画面に無い');
+  assert.match(js, /handlers\.onSave/, '保存を呼び出していない');
+  const app = read('src/ui/app.js');
+  assert.match(app, /onSave:/, 'app.js が保存をつないでいない');
+  assert.match(app, /a\.download/, 'ファイルとして保存していない');
+});
+
+test('保存のボタンの名前は、実際に保存されるものに合わせる', () => {
+  // PDFが作れなかったときは絵（PNG）になる。「PDFで保存」と出したらうそになる
+  const js = read('src/ui/print-preview.js');
+  assert.match(js, /saveBtn\.textContent = .*pdf.*'PDF\u3067\u4fdd\u5b58'/i, '名前を切り替えていない');
+});
+
+test('保存したあと、すぐに片付けない', () => {
+  // 【開発ルール28.3】保存が終わる前に片付けると、途中で切れることがある
+  const app = read('src/ui/app.js');
+  const i = app.indexOf('function savePrintFile');
+  assert.ok(i >= 0, '保存の処理が無い');
+  const body = app.slice(i, app.indexOf('\n}\n', i));
+  assert.match(body, /setTimeout\(/, 'すぐに片付けている');
+  assert.match(body, /revokeObjectURL/, '後片付けをしていない（あとで必ずやること）');
 });
 
 test('絵をファイルに直す処理が、待ち時間を作らない', () => {
