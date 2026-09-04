@@ -18,7 +18,7 @@
 // 【重要】新しい版を配布するときは、このCACHE_VERSIONを必ず変更すること。
 // 変更しないと、ファイルの中身を更新してもservice-worker.js自体のバイト列が変わらない場合
 // ブラウザが「更新なし」と判断し、新しい内容がキャッシュされないことがある。
-const CACHE_VERSION = 'v0.3.3'; // 配布のたびに更新。src/version.jsのAPP_VERSIONと手動で合わせる運用
+const CACHE_VERSION = 'v0.3.4'; // 配布のたびに更新。src/version.jsのAPP_VERSIONと手動で合わせる運用
 // （このファイルはクラシックスクリプトとして登録しているためimportできず、自動連動はできない）
 const CACHE_NAME = `dxf-viewer-shell-${CACHE_VERSION}`;
 
@@ -62,6 +62,7 @@ const APP_SHELL_FILES = [
   './src/drawing.js',
   './src/dxf-parse.js',
   './src/hatch.js',
+  './src/measure.js',
   './src/dwg-parse.js',
   './src/viewport.js',
   './src/print-area.js',
@@ -75,11 +76,13 @@ const APP_SHELL_FILES = [
   './src/ui/file-open.js',
   './src/ui/print-preview.js',
   './src/ui/print-ui.js',
+  './src/ui/measure-ui.js',
   './src/ui/gestures.js',
   './src/ui/toolbar.js',
   './src/ui/drawing-list.css',
   './src/ui/print-preview.css',
   './src/ui/print-ui.css',
+  './src/ui/measure-ui.css',
   './src/ui/ui.css',
 ];
 

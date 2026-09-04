@@ -1,0 +1,175 @@
+/* measure-ui.css — 「長さを測る」画面の見た目だけ（開発ルール39章）
+ *
+ * クラス名はすべて ms- で始めて、他とぶつからないようにしています。
+ *
+ * 重ね順（z-index）は 44。
+ *   版番号20 ／ お知らせ30 ／ 更新案内40 より前、
+ *   範囲を囲む画面45 より後ろ（この2つは同時には出ません）。
+ *
+ * 【いちばん大事なこと】
+ * この画面の部品は、**指をいっさい受け取りません**（pointer-events: none）。
+ * 受け取ってしまうと、2本指の拡大縮小や図面の移動ができなくなります。
+ * ボタンだけは受け取ります。
+ */
+
+.ms-root {
+  position: fixed;
+  z-index: 44;
+  /* 【重要】指を通す。ここを消すと図面が動かせなくなる */
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.ms-svg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+/* 2点をつなぐ線 */
+.ms-line {
+  stroke: #d12b2b;
+  stroke-width: 2;
+  stroke-dasharray: 7 4;
+}
+
+/* 測った点の印 */
+.ms-dot {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 3px solid #d12b2b;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+/* 長さの文字（線の真ん中に出す） */
+.ms-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: #d12b2b;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: bold;
+  line-height: 1.4;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+/* 上の案内 */
+.ms-guide {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  max-width: calc(100% - 24px);
+  padding: 10px 18px;
+  background: #fdeceb;
+  color: #8c2019;
+  border: 1px solid #f3c4c0;
+  border-radius: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+  pointer-events: none;
+}
+
+.ms-guide-sub {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+/* 測り終わったときの箱 */
+.ms-result {
+  position: absolute;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(440px, calc(100% - 24px));
+  padding: 14px;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  /* ここだけは指を受け取る（ボタンがあるため） */
+  pointer-events: auto;
+}
+
+.ms-result-text {
+  margin: 0;
+  color: #111111;
+  line-height: 1.5;
+}
+
+.ms-result-text strong {
+  display: block;
+  font-size: 26px;
+  color: #b3261e;
+}
+
+.ms-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  color: #555555;
+}
+
+.ms-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+/* 指で押しやすい大きさを必ず確保する（開発ルール11章：1辺44px以上）。 */
+.ms-btn {
+  flex: 1 1 0;
+  min-width: 44px;
+  min-height: 48px;
+  border: none;
+  border-radius: 12px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.ms-again {
+  background: #f4f4f4;
+  color: #111111;
+}
+
+.ms-again:active {
+  background: #e6e6e6;
+}
+
+.ms-close {
+  background: #b3261e;
+  color: #ffffff;
+}
+
+.ms-close:active {
+  background: #8c1d17;
+}
+
+/* 【重要】印刷のときは、この画面を紙に出さない（開発ルール26.6）。
+ * 図面以外は一切印刷しない。 */
+@media print {
+  .ms-root {
+    display: none !important;
+  }
+}

@@ -1,7 +1,7 @@
 // toolbar.js — 画面のボタン類（開発ルール2.2：1ファイル1役割）
 //
-// このアプリで用意するボタンは、この4つだけ（むやみに増やさない）。
-//   図面を開く／図面を選ぶ／全体表示／印刷する範囲
+// このアプリで用意するボタンは、この5つだけ（むやみに増やさない）。
+//   図面を開く／図面を選ぶ／全体表示／長さを測る／印刷する範囲
 //
 // 【「拡大」「縮小」ボタンは外した（v0.2.4／ユーザー判断）】
 //   iPadでは2本指のつまむ操作（ピンチ）で拡大縮小できるので、ボタンは要らない。
@@ -29,6 +29,15 @@ const ICONS = {
       <rect x="3.5" y="10.3" width="17" height="3.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.7" />
       <rect x="3.5" y="16.1" width="17" height="3.4" rx="1" fill="none" stroke="currentColor" stroke-width="1.7" />
     </svg>`,
+  // 長さを測る：ものさしの絵（両端に矢印のついた線と、目盛り）
+  measure: `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <line x1="3.5" y1="17" x2="20.5" y2="17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      <path d="M3.5 17l3-2.6M3.5 17l3 2.6M20.5 17l-3-2.6M20.5 17l-3 2.6"
+            fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M6.5 11.5V7M12 11.5V4.5M17.5 11.5V7"
+            fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+    </svg>`,
   // 印刷する範囲：プリンターの絵に、囲みを表す点線の四角を重ねる
   print: `
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -47,6 +56,7 @@ const BUTTONS = [
   // 覚えている図面から選ぶ。「図面を開く」の隣に置く（役割が近いので並べる）
   { action: 'recent', icon: ICONS.recent, label: '図面を選ぶ' },
   { action: 'fit', icon: ICONS.fit, label: '全体表示' },
+  { action: 'measure', icon: ICONS.measure, label: '長さを測る' },
   // このアプリの一番の目的（開発ルール26章）。右端に置いて押し間違えを減らす。
   { action: 'print', icon: ICONS.print, label: '印刷する範囲' },
 ];
@@ -58,6 +68,7 @@ const BUTTONS = [
  *   onOpen()    … 「図面を開く」が押された
  *   onRecent()  … 「図面を選ぶ」（覚えている図面の一覧）が押された
  *   onFit()     … 「全体表示」が押された
+ *   onMeasure() … 「長さを測る」が押された
  *   onPrint()   … 「印刷する範囲」が押された（範囲を囲むモードに入る）
  * @returns {() => void} 後片付け用。呼ぶとボタンの反応をやめる。
  */
@@ -76,6 +87,7 @@ export function attachToolbar(container, handlers = {}) {
     if (action === 'open') handlers.onOpen && handlers.onOpen();
     else if (action === 'recent') handlers.onRecent && handlers.onRecent();
     else if (action === 'fit') handlers.onFit && handlers.onFit();
+    else if (action === 'measure') handlers.onMeasure && handlers.onMeasure();
     else if (action === 'print') handlers.onPrint && handlers.onPrint();
   };
 

@@ -25,6 +25,8 @@ import { createPrintPreview } from './print-preview.js';
 import { createPrintImage, isAreaBigEnough } from '../print-area.js';
 import { createPrintPdf } from '../print-pdf.js';
 import { isApplePrintShareDevice } from './device.js';
+import { createMeasureUi } from './measure-ui.js';
+import { findSnapPoint, SNAP_RADIUS_PX } from '../measure.js';
 import { startUpdateCheck } from '../update-check.js';
 
 // ------------------------------------------------------------
@@ -274,6 +276,11 @@ function redraw() {
       `図面の表示中に問題が起きました。\n詳細：${err && err.message ? err.message : err}`
     );
   }
+
+  // 【開発ルール39.3】測った印は画面の座標で置いてあるので、
+  // 図面を動かしたり拡大したりしたら、必ず置き直す。
+  // ここを忘れると、印だけが取り残されて**まったく別の場所を測ったように見える。**
+  if (measureUi.isActive()) measureUi.refresh();
 }
 
 // ------------------------------------------------------------
@@ -696,6 +703,45 @@ function printFallbackViaPage() {
   window.print();
 }
 
+// ------------------------------------------------------------
+// 長さを測る（開発ルール39章）
+//
+// 【印刷の範囲を囲む画面とは、作りが違う】
+// あちらは透明な板をかぶせて指を全部受け取る。
+// こちらは**板をかぶせない**ので、2本指の拡大縮小も図面の移動も、
+// 今までどおりそのまま効く（32章・33章で作ったものを作り直さない）。
+// 指1本のタップは gestures.js の onTap がすでに拾ってくれるので、それを回す。
+// ------------------------------------------------------------
+const measureUi = createMeasureUi(canvas, {
+  toScreen: (x, y) => {
+    const vp = ensureViewport();
+    return vp && viewportMod ? viewportMod.toScreen(vp, x, y) : [0, 0];
+  },
+  get units() {
+    return (currentDrawing && currentDrawing.units) || 'mm';
+  },
+  onExit: () => { /* モードから抜けただけ。何もしない */ },
+});
+
+/**
+ * 「長さを測る」ときのタップ。
+ *
+ * 指で正確な位置をタップするのは無理なので、近くの
+ * 「線の端・真ん中・円の中心」などへ**吸い付かせる**（39.1）。
+ * 近くに何も無ければ、タップした場所をそのまま使う。
+ */
+function onMeasureTap(screenX, screenY) {
+  const vp = ensureViewport();
+  if (!vp || !viewportMod || !currentDrawing) return;
+
+  const [x, y] = viewportMod.toDrawing(vp, screenX, screenY);
+  // 吸い付く範囲は「画面で何ピクセルか」で決める。
+  // 図面の座標に直すには、今の拡大率で割る（拡大すると細かく狙える）
+  const 範囲 = SNAP_RADIUS_PX / (vp.scale || 1);
+  const 吸い付き = findSnapPoint(currentDrawing.entities, x, y, 範囲);
+  measureUi.addPoint(吸い付き || { x, y, kind: 'そのまま' });
+}
+
 /**
  * 囲まれた範囲を印刷する。
  * @param {object} rectScreen キャンバスの左上を基準にした四角 { x, y, width, height }
@@ -810,6 +856,8 @@ attachToolbar(toolbarEl, {
       return;
     }
     hideError();
+    // 長さを測っている最中なら、そちらをやめてから始める（同時には出さない）
+    if (measureUi.isActive()) measureUi.stop();
     printUi.start();
   },
   onRecent: () => {
@@ -818,6 +866,20 @@ attachToolbar(toolbarEl, {
       return;
     }
     showDrawingList();
+  },
+  onMeasure: () => {
+    if (!viewportMod || !renderMod) {
+      showError('図面を表示する部品がまだ準備できていません。しばらくしてからもう一度お試しください。');
+      return;
+    }
+    if (!currentDrawing) {
+      showError('図面が開かれていません。先に図面を開いてください。');
+      return;
+    }
+    hideError();
+    // 印刷の範囲を囲んでいる最中なら、そちらをやめてから始める（同時には出さない）
+    if (printUi.isActive()) printUi.stop();
+    measureUi.start();
   },
   onFit: () => {
     const vp = ensureViewport();
@@ -845,8 +907,9 @@ attachGestures(canvas, {
     viewportMod.zoomAt(vp, centerX, centerY, factor);
     scheduleRedraw();
   },
-  onTap: (_x, _y) => {
-    // v1（今回）では寸法測定は作らない。あとの段階で使うための受け口だけ用意している。
+  onTap: (x, y) => {
+    // 「長さを測る」のときだけ使う。ふだんのタップでは何も起きない
+    if (measureUi.isActive()) onMeasureTap(x, y);
   },
 });
 

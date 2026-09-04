@@ -25,6 +25,7 @@ import {
   bulgePoints,
   hatchToLines,
 } from './hatch.js';
+import { insunitsToUnits } from './measure.js';
 
 // ============================================================
 // 文字コードの変換（バイト列 → 文字列）
@@ -1404,6 +1405,17 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
  * @param {string} text DXFファイルの中身
  * @returns {object} src/drawing.js に定義された形の図形データ
  */
+/**
+ * ヘッダーの $INSUNITS（図面の単位）を読む（開発ルール39.2）。
+ *
+ * 書いていない図面もある。そのときはミリとみなす
+ * （日本の建築・設備の図面はミリで描くのがふつう。実物の図面も4＝ミリだった）。
+ */
+function readInsunits(text) {
+  const m = String(text).match(/\$INSUNITS\s*[\r\n]+\s*70\s*[\r\n]+\s*(-?\d+)/);
+  return insunitsToUnits(m ? Number(m[1]) : 4);
+}
+
 export function parseDxf(text) {
   if (isBinaryDxf(text)) {
     throw new Error(
@@ -1421,6 +1433,9 @@ export function parseDxf(text) {
     // ここまで来て失敗するのは想定外の壊れ方。空の図面を返す（落ちない）
     return finishDrawing(drawing);
   }
+
+  // 図面の単位（ミリなのか、メートルなのか）。長さを測るときに使う（開発ルール39.2）
+  drawing.units = readInsunits(text);
 
   const { layers, blocks, topEntityRecords } = sections;
   // 図形を組み立てる前に直すこと。あとからでは、消された図形は戻らない（34章）
