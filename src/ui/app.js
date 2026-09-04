@@ -468,8 +468,33 @@ async function showDrawingList() {
 //   5. iPadの標準の印刷画面を開く
 // ------------------------------------------------------------
 const printUi = createPrintUi(canvas, {
-  onPrint: (rectScreen) => { printSelectedArea(rectScreen); },
+  onPrint: (rectScreen, info) => { printSelectedArea(rectScreen, info); },
   onCancel: () => { /* モードから抜けただけ。何もしない */ },
+
+  // 【範囲を囲んでいる間も、図面を拡大縮小できるようにする（開発ルール32章）】
+  // 指2本の操作は print-ui.js が見分けて、ここを呼ぶ。
+  // 図面の座標との行き来は viewport.js だけの仕事なので（10.6）、
+  // print-ui.js には計算させず、この4つの道を渡しておく。
+  onPan: (dxScreen, dyScreen) => {
+    const vp = ensureViewport();
+    if (!vp) return;
+    viewportMod.panBy(vp, dxScreen, dyScreen);
+    scheduleRedraw();
+  },
+  onZoom: (cx, cy, factor) => {
+    const vp = ensureViewport();
+    if (!vp) return;
+    viewportMod.zoomAt(vp, cx, cy, factor);
+    scheduleRedraw();
+  },
+  toDrawing: (x, y) => {
+    const vp = ensureViewport();
+    return vp ? viewportMod.toDrawing(vp, x, y) : [x, y];
+  },
+  toScreen: (x, y) => {
+    const vp = ensureViewport();
+    return vp ? viewportMod.toScreen(vp, x, y) : [x, y];
+  },
 });
 
 // 印刷される絵を、押す前に確認してもらう画面（開発ルール28.2）
@@ -534,10 +559,14 @@ function printFallbackViaPage() {
  * 囲まれた範囲を印刷する。
  * @param {object} rectScreen キャンバスの左上を基準にした四角 { x, y, width, height }
  */
-async function printSelectedArea(rectScreen) {
+async function printSelectedArea(rectScreen, info = {}) {
   // 【開発ルール26.7】指が滑っただけの小さな範囲では印刷させない。
   // 判定は print-area.js に置いてある（画面を作る側と、絵を作る側で二重に持たない）。
-  const check = isAreaBigEnough(rectScreen);
+  //
+  // 【32.3】測るのは「**囲んだときの大きさ**」。
+  // 縮小して図面ぜんたいを見てから印刷すると、四角は画面上では小さく見える。
+  // それを「小さすぎる」と断ってはいけない。範囲そのものは変わっていない。
+  const check = isAreaBigEnough(info.sizedRect || rectScreen);
   if (!check.ok) {
     showError(check.reason);
     printUi.start(); // もう一度囲んでもらう

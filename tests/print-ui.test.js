@@ -24,6 +24,10 @@ import {
   isInsideRect,
   resizeRect,
   moveRect,
+  pinchMidpoint,
+  pinchDistance,
+  rectToDrawing,
+  rectFromDrawing,
 } from '../src/ui/print-ui.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -241,4 +245,148 @@ test('拡大縮小そのものは無くなっていない（2本指のつまむ�
   const app = read('src/ui/app.js');
   assert.match(app, /attachGestures\(/, '指の操作をつないでいない');
   assert.match(app, /onZoom/, 'つまむ操作での拡大縮小が無い');
+});
+
+// ============================================================
+// 囲んでいる間の拡大縮小（v0.2.5／開発ルール32章）
+// ============================================================
+
+test('2本指の真ん中と距離を、正しく求める', () => {
+  const a = { x: 100, y: 200 };
+  const b = { x: 300, y: 200 };
+  assert.deepEqual(pinchMidpoint(a, b), { x: 200, y: 200 });
+  assert.equal(pinchDistance(a, b), 200);
+  // 順番を入れ替えても同じ
+  assert.deepEqual(pinchMidpoint(b, a), { x: 200, y: 200 });
+  assert.equal(pinchDistance(b, a), 200);
+});
+
+// 図面の座標と画面の座標を行き来する、試験用の簡単な変換。
+// viewport.js と同じで、**Y軸は上下が逆**（CADは上向き、画面は下向き）。
+function 変換をつくる(scale, offsetX, offsetY) {
+  return {
+    toScreen: (x, y) => [(x - offsetX) * scale, (offsetY - y) * scale],
+    toDrawing: (sx, sy) => [sx / scale + offsetX, offsetY - sy / scale],
+  };
+}
+
+test('四角を図面の座標へ直して戻すと、元どおりになる', () => {
+  const v = 変換をつくる(2, 50, 400);
+  const 元 = { x: 120, y: 80, width: 300, height: 200 };
+  const 図面での範囲 = rectToDrawing(元, v.toDrawing);
+  const 戻り = rectFromDrawing(図面での範囲, v.toScreen);
+  for (const k of ['x', 'y', 'width', 'height']) {
+    assert.ok(
+      Math.abs(戻り[k] - 元[k]) < 1e-9,
+      `${k} が戻っていない（${元[k]} → ${戻り[k]}）`
+    );
+  }
+});
+
+test('【いちばん大事】拡大しても、四角は図面の同じ場所を指し続ける', () => {
+  // これが無いと、図面だけが動いて四角は画面に取り残され、
+  // 「囲んだつもりの場所」と「実際に印刷される場所」がずれる。
+  const 前 = 変換をつくる(2, 50, 400);
+  const 四角 = { x: 120, y: 80, width: 300, height: 200 };
+  const 図面での範囲 = rectToDrawing(四角, 前.toDrawing);
+
+  // 3倍に拡大し、位置もずらした（ピンチしたのと同じこと）
+  const 後 = 変換をつくる(6, 90, 360);
+  const 新しい四角 = rectFromDrawing(図面での範囲, 後.toScreen);
+
+  // 新しい四角を、拡大後の変換で図面の座標に直すと、元と同じ範囲になるはず
+  const 直した = rectToDrawing(新しい四角, 後.toDrawing);
+  for (const k of ['minX', 'minY', 'maxX', 'maxY']) {
+    assert.ok(
+      Math.abs(直した[k] - 図面での範囲[k]) < 1e-9,
+      `図面の ${k} がずれた（${図面での範囲[k]} → ${直した[k]}）`
+    );
+  }
+  // 3倍に拡大したので、画面の上では3倍の大きさになる
+  assert.ok(Math.abs(新しい四角.width - 四角.width * 3) < 1e-9, '横が3倍になっていない');
+  assert.ok(Math.abs(新しい四角.height - 四角.height * 3) < 1e-9, '縦が3倍になっていない');
+});
+
+test('縮小しても、幅・高さが負にならない（上下が逆でも壊れない）', () => {
+  // viewport.js はY軸をひっくり返すので、変換の向きを取り違えると
+  // 高さが負になって、四角が消えたように見える
+  const v = 変換をつくる(0.25, 1000, 2000);
+  const 図面での範囲 = { minX: 100, minY: 100, maxX: 400, maxY: 300 };
+  const r = rectFromDrawing(図面での範囲, v.toScreen);
+  assert.ok(r.width > 0, `横が ${r.width}`);
+  assert.ok(r.height > 0, `縦が ${r.height}`);
+});
+
+// ------------------------------------------------------------
+// 画面の作り（ソースを読んで確かめる）
+// ------------------------------------------------------------
+
+test('指2本のときは、範囲を囲まずに図面を拡大縮小する', () => {
+  const js = read('src/ui/print-ui.js');
+  assert.match(js, /pointers\.size >= 2/, '2本目の指を見分けていない');
+  assert.match(js, /function switchToPinch/, '2本指の操作に切り替える処理が無い');
+  assert.match(js, /handlers\.onZoom/, '拡大縮小を呼び出していない');
+  assert.match(js, /handlers\.onPan/, '移動を呼び出していない');
+});
+
+test('拡大縮小したとき、四角を図面に貼り付け直している', () => {
+  // ここを忘れると、図面だけ動いて四角が取り残される
+  const js = read('src/ui/print-ui.js');
+  const i = js.indexOf('function moveView');
+  assert.ok(i >= 0, '図面を動かす処理が無い');
+  const body = js.slice(i, js.indexOf('\n  }\n', i));
+  assert.match(body, /rectToDrawing/, '動かす前に図面の座標へ直していない');
+  assert.match(body, /rectFromDrawing/, '動かしたあとに画面の座標へ戻していない');
+});
+
+test('図面の座標との行き来を、print-ui.js が自前で計算していない', () => {
+  // 座標の変換は viewport.js だけの仕事（開発ルール10.6）。
+  // ここで自前にY軸をひっくり返すと、直す場所が2か所になって必ず食い違う。
+  const js = read('src/ui/print-ui.js');
+  assert.match(js, /handlers\.toDrawing/, '呼び出し側からの変換を使っていない');
+  assert.match(js, /handlers\.toScreen/, '呼び出し側からの変換を使っていない');
+  assert.ok(
+    !/offsetY|vp\.scale/.test(js),
+    'print-ui.js が自分で座標の計算をしている（viewport.js に任せること）'
+  );
+});
+
+test('app.js が、拡大縮小の道を print-ui につないでいる', () => {
+  const app = read('src/ui/app.js');
+  const i = app.indexOf('const printUi = createPrintUi(');
+  assert.ok(i >= 0, 'printUi を作っていない');
+  const body = app.slice(i, app.indexOf('\n});', i));
+  assert.match(body, /onZoom:/, '拡大縮小をつないでいない');
+  assert.match(body, /onPan:/, '移動をつないでいない');
+  assert.match(body, /toDrawing:/, '図面の座標への変換をつないでいない');
+  assert.match(body, /toScreen:/, '画面の座標への変換をつないでいない');
+  assert.match(body, /viewportMod\.zoomAt/, 'viewport.js の拡大縮小を使っていない');
+});
+
+test('縮小してから印刷しても「範囲が小さすぎます」と断られない', () => {
+  // 図面ぜんたいを見ようと縮小すると、四角は画面上では小さく見える。
+  // だが範囲そのものは変わっていないので、断ってはいけない。
+  const js = read('src/ui/print-ui.js');
+  assert.match(js, /sizedRect/, '囲んだときの大きさを渡していない');
+  const app = read('src/ui/app.js');
+  assert.match(
+    app,
+    /isAreaBigEnough\(info\.sizedRect \|\| rectScreen\)/,
+    '囲んだときの大きさで判定していない'
+  );
+});
+
+test('モードから抜けるとき、おさえている指の記録も空に戻す', () => {
+  // 残ると「触っていないのに図面が動き続ける」不具合になる（gestures.js と同じ事故対策）
+  const js = read('src/ui/print-ui.js');
+  const i = js.indexOf('function teardown');
+  assert.ok(i >= 0, '後片付けが無い');
+  const body = js.slice(i, js.indexOf('\n  }\n', i));
+  assert.match(body, /pointers\.clear\(\)/, '指の記録を消していない');
+});
+
+test('2本指の説明が、画面に出ている', () => {
+  // 出していないと、そもそも拡大縮小できることに気づかない
+  const js = read('src/ui/print-ui.js');
+  assert.match(js, /2本指で図面を拡大・縮小できます/, '案内が無い');
 });

@@ -19,6 +19,17 @@
 //
 //   大きさや位置を計算する部分は、下の「四角を直す計算」に**ふつうの関数として**
 //   切り出してある。画面が無くても試験できるようにするため（開発ルール7章）。
+//
+// 【囲んでいる間も、図面を拡大縮小できる（v0.2.5／開発ルール32章）】
+//   指1本 … 範囲を囲む・つまみで直す・範囲ごと動かす（今までどおり）
+//   指2本 … 図面そのものを拡大縮小・移動する（ピンチ）
+//
+//   **拡大縮小しても、囲んだ四角は図面の同じ場所に貼り付いたまま**にする。
+//   画面の座標のまま置いておくと、図面だけが動いて、
+//   囲んだつもりの場所と実際に印刷される場所がずれてしまう。
+//   そこで拡大縮小の前に四角を図面の座標へ直し、あとで画面の座標へ戻している。
+//   図面の座標との行き来は、決まりどおり viewport.js に任せる（10.6）。
+//   ここでは呼び出し側（app.js）からもらった toDrawing / toScreen を使うだけ。
 
 // ------------------------------------------------------------
 // 四角を直す計算（画面に触らない。ここだけで試験できる）
@@ -172,6 +183,48 @@ export function resizeRect(rect, handle, point, bounds = null, minSize = MIN_REC
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
+/** 2本指の真ん中の点。ピンチの中心にする。 */
+export function pinchMidpoint(a, b) {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+/** 2本指の間の距離。これが広がれば拡大、縮まれば縮小。 */
+export function pinchDistance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/**
+ * 画面の四角 → 図面の座標での範囲。
+ * 拡大縮小の前にこれを取っておき、あとで rectFromDrawing で戻すと、
+ * **四角が図面の同じ場所に貼り付いたまま**になる。
+ * @param {object} rect 画面の四角
+ * @param {(x:number,y:number)=>[number,number]} toDrawing viewport.js の変換
+ */
+export function rectToDrawing(rect, toDrawing) {
+  const [x1, y1] = toDrawing(rect.x, rect.y);
+  const [x2, y2] = toDrawing(rect.x + rect.width, rect.y + rect.height);
+  return {
+    minX: Math.min(x1, x2), minY: Math.min(y1, y2),
+    maxX: Math.max(x1, x2), maxY: Math.max(y1, y2),
+  };
+}
+
+/**
+ * 図面の座標での範囲 → 画面の四角（rectToDrawing の逆）。
+ * @param {object} area 図面の座標での範囲
+ * @param {(x:number,y:number)=>[number,number]} toScreen viewport.js の変換
+ */
+export function rectFromDrawing(area, toScreen) {
+  const [x1, y1] = toScreen(area.minX, area.minY);
+  const [x2, y2] = toScreen(area.maxX, area.maxY);
+  return {
+    x: Math.min(x1, x2),
+    y: Math.min(y1, y2),
+    width: Math.abs(x2 - x1),
+    height: Math.abs(y2 - y1),
+  };
+}
+
 /**
  * 四角を、形を変えずにそのまま動かす。画面の外へは出さない。
  * @param {object} rect
@@ -233,6 +286,7 @@ export function createPrintUi(canvasEl, handlers = {}) {
   // 'result'    … 指を離した。つまみとボタンを出している
   // 'adjusting' … つまみをつまんで、大きさを直している最中
   // 'moving'    … 四角の中を押したまま、範囲ごと動かしている最中
+  // 'pinching'  … 指2本で、図面そのものを拡大縮小・移動している最中
   let phase = 'ready';
 
   let activePointerId = null;
@@ -241,6 +295,9 @@ export function createPrintUi(canvasEl, handlers = {}) {
   let adjustHandle = null; // つまんでいるつまみの名前
   let grabOffset = { x: 0, y: 0 }; // つまんだ瞬間の、指とつまみのずれ
   let movePrev = null; // 範囲ごと動かすときの、前回の指の位置
+  // 指で囲んだ・つまんで直した直後の四角（画面の大きさ）。
+  // 拡大縮小では更新しない。「指が滑っただけか」の判定に使う（32.3）。
+  let lastUserSizedRect = null;
 
   // ------------------------------------------------------------
   // DOM。start() のたびに作り、stop() のたびに消す（開発ルール26.4：抜けたら板を必ず取り除く）
@@ -286,11 +343,11 @@ export function createPrintUi(canvasEl, handlers = {}) {
     ).join('');
 
     board.innerHTML = `
-      <p class="pr-guide">印刷したい範囲を指でなぞって囲んでください</p>
+      <p class="pr-guide">印刷したい範囲を指でなぞって囲んでください<br><span class="pr-guide-sub">2本指で図面を拡大・縮小できます</span></p>
       <div class="pr-select" hidden>${handlesHtml}</div>
       <div class="pr-dim" hidden></div>
       <div class="pr-actions" hidden>
-        <p class="pr-hint">丸をつまむと大きさを直せます。四角の中を押したまま動かすと、範囲ごと動かせます。</p>
+        <p class="pr-hint">丸をつまむと大きさを直せます。四角の中を押したまま動かすと、範囲ごと動かせます。<br>2本指で図面を拡大・縮小できます（範囲は図面についてきます）。</p>
         <button type="button" class="pr-btn pr-btn-print">この範囲を印刷</button>
         <div class="pr-actions-row">
           <button type="button" class="pr-btn pr-btn-retry">囲み直す</button>
@@ -316,6 +373,8 @@ export function createPrintUi(canvasEl, handlers = {}) {
     board.addEventListener('pointerup', onPointerUp);
     board.addEventListener('pointercancel', onPointerCancel);
     board.addEventListener('lostpointercapture', onLostPointerCapture);
+    // passive:false … 拡大縮小のときにページ自体が動くのを止めるため
+    board.addEventListener('wheel', onWheel, { passive: false });
 
     printBtn.addEventListener('click', onPrintClick);
     retryBtn.addEventListener('click', onRetryClick);
@@ -334,6 +393,7 @@ export function createPrintUi(canvasEl, handlers = {}) {
     board.removeEventListener('pointerup', onPointerUp);
     board.removeEventListener('pointercancel', onPointerCancel);
     board.removeEventListener('lostpointercapture', onLostPointerCapture);
+    board.removeEventListener('wheel', onWheel);
     printBtn.removeEventListener('click', onPrintClick);
     retryBtn.removeEventListener('click', onRetryClick);
     cancelBtn.removeEventListener('click', onCancelClick);
@@ -445,8 +505,9 @@ export function createPrintUi(canvasEl, handlers = {}) {
   }
 
   /** 囲み終わった（または調整し終わった）状態にする。 */
-  function settle(rect) {
+  function settle(rect, 指で決めた = true) {
     currentRect = rect;
+    if (指で決めた) lastUserSizedRect = rect;
     phase = 'result';
     paintRect(currentRect);
     paintHandles(currentRect, true);
@@ -455,7 +516,17 @@ export function createPrintUi(canvasEl, handlers = {}) {
 
   // ------------------------------------------------------------
   // 指・マウスの操作
+  //
+  // 指1本 … 範囲を囲む・つまみで直す・範囲ごと動かす
+  // 指2本 … 図面そのものを拡大縮小・移動する（開発ルール32章）
   // ------------------------------------------------------------
+
+  /** 今おさえている指。pointerId → { x, y }（clientX/Y そのまま）。gestures.js と同じ持ち方。 */
+  const pointers = new Map();
+  let lastPinchMid = null;
+  let lastPinchDist = null;
+  /** 1本指の操作を始める直前の四角。2本目の指が触れたときに、ここまで戻す。 */
+  let rectBeforeGesture = null;
 
   function beginPointer(ev) {
     try {
@@ -464,11 +535,76 @@ export function createPrintUi(canvasEl, handlers = {}) {
       // 対応していない環境でも、動作自体は続行できる
     }
     activePointerId = ev.pointerId;
+    rectBeforeGesture = currentRect;
+  }
+
+  /** 今おさえている指のうち、先頭の2本（3本目以降は見ない）。 */
+  function twoPoints() {
+    return Array.from(pointers.values()).slice(0, 2);
+  }
+
+  /**
+   * 図面を動かす（拡大縮小・移動）。
+   *
+   * 【四角は図面に貼り付けたまま動かす（開発ルール32.2）】
+   * 何もしないと、図面だけが動いて四角は画面に取り残される。
+   * すると「囲んだつもりの場所」と「実際に印刷される場所」がずれる。
+   * そこで、動かす前に四角を図面の座標へ直し、動かしたあとで画面の座標へ戻す。
+   */
+  function moveView(動かす) {
+    const 貼り付け先 =
+      currentRect && handlers.toDrawing && handlers.toScreen
+        ? rectToDrawing(currentRect, handlers.toDrawing)
+        : null;
+
+    動かす();
+
+    if (!貼り付け先) return;
+    currentRect = rectFromDrawing(貼り付け先, handlers.toScreen);
+    paintRect(currentRect);
+    paintHandles(currentRect, phase !== 'dragging');
+    positionActions(currentRect);
+  }
+
+  /** 2本目の指が触れた。1本指でやりかけていたことを、なかったことにする。 */
+  function switchToPinch() {
+    if (activePointerId !== null) releaseCapture(activePointerId);
+    activePointerId = null;
+    adjustHandle = null;
+    movePrev = null;
+    startPt = null;
+
+    if (phase === 'dragging') {
+      // 囲みかけだった。まだ四角として確定していないので、捨てて元に戻す
+      currentRect = rectBeforeGesture;
+      if (currentRect) settle(currentRect);
+      else {
+        phase = 'ready';
+        hideRect();
+        hideActions();
+      }
+    } else if ((phase === 'adjusting' || phase === 'moving') && rectBeforeGesture) {
+      // つまみ始めていた。2本指で拡大したいだけなので、つまむ前の形に戻す
+      currentRect = rectBeforeGesture;
+      settle(currentRect);
+    }
+
+    phase = 'pinching';
+    const pts = twoPoints();
+    lastPinchMid = pinchMidpoint(pts[0], pts[1]);
+    lastPinchDist = pinchDistance(pts[0], pts[1]);
   }
 
   function onPointerDown(ev) {
     // ボタンの箱の上を押したときは、なぞり操作として扱わない（ボタン自身の click に任せる）。
     if (ev.target.closest('.pr-actions')) return;
+
+    pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+    if (pointers.size >= 2) {
+      switchToPinch();
+      return;
+    }
 
     const pt = toCanvasPoint(ev.clientX, ev.clientY);
 
@@ -501,13 +637,39 @@ export function createPrintUi(canvasEl, handlers = {}) {
         return;
       }
       // 四角の外を押したときは何もしない。囲み直すときは「囲み直す」を押してもらう
-      return;
     }
-
-    // 'dragging' 中に別の指が触れても無視する（1本指だけを見る）
   }
 
   function onPointerMove(ev) {
+    if (!pointers.has(ev.pointerId)) return;
+    pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+    // 指2本：図面を拡大縮小・移動する
+    if (phase === 'pinching' && pointers.size >= 2) {
+      const pts = twoPoints();
+      const mid = pinchMidpoint(pts[0], pts[1]);
+      const dist = pinchDistance(pts[0], pts[1]);
+
+      moveView(() => {
+        if (lastPinchMid) {
+          const dx = mid.x - lastPinchMid.x;
+          const dy = mid.y - lastPinchMid.y;
+          if ((dx !== 0 || dy !== 0) && handlers.onPan) handlers.onPan(dx, dy);
+        }
+        if (lastPinchDist > 0 && dist > 0 && handlers.onZoom) {
+          const factor = dist / lastPinchDist;
+          if (factor !== 1) {
+            const c = toCanvasPoint(mid.x, mid.y);
+            handlers.onZoom(c.x, c.y, factor);
+          }
+        }
+      });
+
+      lastPinchMid = mid;
+      lastPinchDist = dist;
+      return;
+    }
+
     if (ev.pointerId !== activePointerId) return;
     const pt = toCanvasPoint(ev.clientX, ev.clientY);
 
@@ -538,6 +700,25 @@ export function createPrintUi(canvasEl, handlers = {}) {
   }
 
   function onPointerUp(ev) {
+    const いた = pointers.delete(ev.pointerId);
+    if (!いた) return;
+
+    // 指2本 → 1本以下。拡大縮小は終わり。
+    // 残った指はそのまま置いておく（続けて囲み始めたりはしない）。
+    if (phase === 'pinching') {
+      if (pointers.size < 2) {
+        lastPinchMid = null;
+        lastPinchDist = null;
+        if (currentRect) settle(currentRect, false);
+        else {
+          phase = 'ready';
+          hideRect();
+          hideActions();
+        }
+      }
+      return;
+    }
+
     if (ev.pointerId !== activePointerId) return;
     releaseCapture(ev.pointerId);
     activePointerId = null;
@@ -557,6 +738,22 @@ export function createPrintUi(canvasEl, handlers = {}) {
 
   /** 指を離し忘れた・画面の外へ出た（pointercancel）ときの事故対策。gestures.js と同じ考え方。 */
   function onPointerCancel(ev) {
+    pointers.delete(ev.pointerId);
+
+    if (phase === 'pinching') {
+      if (pointers.size < 2) {
+        lastPinchMid = null;
+        lastPinchDist = null;
+        if (currentRect) settle(currentRect, false);
+        else {
+          phase = 'ready';
+          hideRect();
+          hideActions();
+        }
+      }
+      return;
+    }
+
     if (ev.pointerId !== activePointerId) return;
     releaseCapture(ev.pointerId);
     activePointerId = null;
@@ -582,6 +779,17 @@ export function createPrintUi(canvasEl, handlers = {}) {
     }
   }
 
+  /** マウスのホイールでも拡大縮小できるようにする（パソコンでの確認用。gestures.js と同じ）。 */
+  function onWheel(ev) {
+    ev.preventDefault();
+    if (!handlers.onZoom) return;
+    const pt = toCanvasPoint(ev.clientX, ev.clientY);
+    const factor = Math.pow(1.0015, -ev.deltaY);
+    moveView(() => {
+      handlers.onZoom(pt.x, pt.y, factor);
+    });
+  }
+
   function releaseCapture(pointerId) {
     try {
       if (board.hasPointerCapture && board.hasPointerCapture(pointerId)) {
@@ -605,13 +813,18 @@ export function createPrintUi(canvasEl, handlers = {}) {
   function onPrintClick() {
     if (phase !== 'result' || !currentRect) return;
     const rect = currentRect;
+    // 【開発ルール32.3】「指が滑っただけか」の判定は、**囲んだときの大きさ**で行う。
+    // 縮小して図面ぜんたいを見てから印刷すると、四角は画面上では小さく見える。
+    // それを「範囲が小さすぎる」と断ってはいけない。範囲そのものは変わっていない。
+    const 囲んだときの大きさ = lastUserSizedRect || rect;
     teardown();
-    handlers.onPrint?.(rect);
+    handlers.onPrint?.(rect, { sizedRect: 囲んだときの大きさ });
   }
 
   function onRetryClick() {
     if (phase !== 'result') return;
     currentRect = null;
+    lastUserSizedRect = null;
     phase = 'ready';
     hideRect();
     hideActions();
@@ -636,8 +849,13 @@ export function createPrintUi(canvasEl, handlers = {}) {
     activePointerId = null;
     startPt = null;
     currentRect = null;
+    lastUserSizedRect = null;
     adjustHandle = null;
     movePrev = null;
+    pointers.clear();
+    lastPinchMid = null;
+    lastPinchDist = null;
+    rectBeforeGesture = null;
   }
 
   function start() {
