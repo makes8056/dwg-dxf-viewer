@@ -56,7 +56,7 @@ const MAX_TOTAL_PX = 12_000_000; // 全体の点の数の最大（1200万点）
 // 線の太さ：印刷したとき0.25mm程度になるように換算する（26.5）。
 //   0.25[mm] × 7.874016[点/mm] ≒ 1.968503... 点（およそ2点）
 // 画面用の既定値（src/render.js の DEFAULT_LINE_WIDTH = 1.2）とは別の値になる。
-const PRINT_LINE_WIDTH_MM = 0.25;
+export const PRINT_LINE_WIDTH_MM = 0.25;
 const PRINT_LINE_WIDTH_PX = PX_PER_MM * PRINT_LINE_WIDTH_MM; // ≒ 1.9685
 
 // 範囲が小さすぎるときの目安（26.7）。短いほうの辺がこれ未満なら「指が滑っただけ」とみなす。
@@ -109,6 +109,65 @@ function defaultCreateCanvas(widthPx, heightPx) {
 // ------------------------------------------------------------
 // 公開する関数
 // ------------------------------------------------------------
+
+/**
+ * 【紙の上のどこに、どれだけの大きさで置くか】を決める（開発ルール36.2）。
+ *
+ * 絵（PNG）を作るときも、PDFを作るときも、**必ずこの1つを使う。**
+ * 別々に計算すると、確認画面と実際に出る紙がずれる。
+ * それは紙に出すまで気づけない、いちばんたちの悪いずれ方になる。
+ *
+ * 単位はすべてミリ。図面の座標との関係は
+ *   紙のX(mm) = originXmm + (図面のx - area.minX) * scale
+ *   紙のY(mm) = originYmm + (図面のy - area.minY) * scale
+ * ※Yは「上へ行くほど大きい」ままで考える（紙をひっくり返さない）。
+ *   Canvasに描くときだけ、viewport.js が上下を入れ替える（10.6）。
+ *
+ * @param {object} area 図面座標での範囲
+ * @returns {{orientation:string, pageWmm:number, pageHmm:number, marginMm:number,
+ *            innerWmm:number, innerHmm:number, contentWmm:number, contentHmm:number,
+ *            originXmm:number, originYmm:number, scale:number, area:object}}
+ */
+export function computePrintPlacement(area) {
+  const a = normalizeArea(area);
+  const areaW = a.maxX - a.minX;
+  const areaH = a.maxY - a.minY;
+  const orientation = areaW >= areaH ? 'landscape' : 'portrait';
+
+  const pageWmm = orientation === 'landscape' ? A4_LONG_MM : A4_SHORT_MM;
+  const pageHmm = orientation === 'landscape' ? A4_SHORT_MM : A4_LONG_MM;
+  const innerWmm = pageWmm - PAGE_MARGIN_MM * 2;
+  const innerHmm = pageHmm - PAGE_MARGIN_MM * 2;
+
+  // 囲んだ範囲を、白い余白の内側にちょうど収める
+  let scale = 1;
+  if (areaW > 0 && areaH > 0) {
+    scale = Math.min(innerWmm / areaW, innerHmm / areaH);
+  } else if (areaW > 0) {
+    scale = innerWmm / areaW;
+  } else if (areaH > 0) {
+    scale = innerHmm / areaH;
+  }
+
+  const contentWmm = areaW * scale;
+  const contentHmm = areaH * scale;
+
+  return {
+    orientation,
+    pageWmm,
+    pageHmm,
+    marginMm: PAGE_MARGIN_MM,
+    innerWmm,
+    innerHmm,
+    contentWmm,
+    contentHmm,
+    // 紙の真ん中に置く
+    originXmm: (pageWmm - contentWmm) / 2,
+    originYmm: (pageHmm - contentHmm) / 2,
+    scale,
+    area: a,
+  };
+}
 
 /**
  * 印刷用の絵の大きさを決める。

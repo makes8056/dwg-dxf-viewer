@@ -23,6 +23,7 @@ import { createDrawingList } from './drawing-list.js';
 import { createPrintUi } from './print-ui.js';
 import { createPrintPreview } from './print-preview.js';
 import { createPrintImage, isAreaBigEnough } from '../print-area.js';
+import { createPrintPdf } from '../print-pdf.js';
 import { startUpdateCheck } from '../update-check.js';
 
 // ------------------------------------------------------------
@@ -527,7 +528,9 @@ function handOverToPrint(blob, name) {
   // 1. iPadなど：共有メニューへ渡す。そこから「プリント」を選んでもらう。
   //    ページを印刷しないので、**URL・日付・ページ番号は一切出ない。**
   if (blob && typeof navigator.share === 'function') {
-    const file = new File([blob], name, { type: 'image/png' });
+    // 種類（MIME）を間違えると、iPadが「プリント」を出さないことがある
+    const 種類 = /\.pdf$/i.test(name) ? 'application/pdf' : 'image/png';
+    const file = new File([blob], name, { type: 種類 });
     if (!navigator.canShare || navigator.canShare({ files: [file] })) {
       navigator.share({ files: [file] }).then(
         () => { printPreview.hide(); },
@@ -619,6 +622,16 @@ async function printSelectedArea(rectScreen, info = {}) {
     return;
   }
 
+  // 【開発ルール36章】紙に渡すのはPDF。絵（PNG）は確認画面に出すために使う。
+  //
+  // 絵は「点の集まり」なので、プリンターが紙ぜんたいを点で塗ることになり、
+  // **印刷にとても時間がかかった**（ユーザーの指摘で判明）。
+  // PDFなら「線を引く命令」で渡せるので速く、線もぼやけない。
+  //
+  // PDFが作れなかったときは、今までどおり絵で印刷する（36.4）。
+  // 印刷できないより、重くても印刷できるほうがよい。
+  const pdf = createPrintPdf(currentDrawing, area);
+
   // 【開発ルール28章】ここでは印刷しない。
   //
   // 以前はここで window.print() を呼んでいたが、iPadで次の不具合が起きた：
@@ -628,19 +641,22 @@ async function printSelectedArea(rectScreen, info = {}) {
   //
   // そこで **ページを印刷するのをやめ、絵そのものをiPadへ渡す**ことにした。
   // まずは確認の画面に出して、目で見てもらう。
+  const PDFで印刷する = !pdf.error && pdf.blob;
   printPreview.show(result.dataUrl, {
-    blob: result.blob || null,
-    name: makePrintFileName(),
+    // 渡すのはPDF。作れなかったときだけ絵（PNG）にする
+    blob: PDFで印刷する ? pdf.blob : result.blob || null,
+    name: makePrintFileName(PDFで印刷する ? 'pdf' : 'png'),
     orientation: result.orientation,
     limited: result.limited,
   });
 }
 
 /**
- * 印刷する絵のファイル名。図面の名前と日時から作る。
+ * 印刷するファイルの名前。図面の名前と日時から作る。
  * iPadの共有メニューに、この名前で出る。
+ * @param {'pdf'|'png'} 拡張子
  */
-function makePrintFileName() {
+function makePrintFileName(拡張子 = 'pdf') {
   const d = new Date();
   const p2 = (n) => String(n).padStart(2, '0');
   const 日時 =
@@ -648,7 +664,7 @@ function makePrintFileName() {
     `_${p2(d.getHours())}${p2(d.getMinutes())}`;
   // もとのファイル名から拡張子（.dxf など）を外す
   const もと = String(currentName || '図面').replace(/\.[^.]+$/, '');
-  return `${もと}_${日時}.png`;
+  return `${もと}_${日時}.${拡張子}`;
 }
 
 
