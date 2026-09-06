@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>アプリを直す｜DWG・DXFビューア</title>
+<!--
+  naosu.html — 「新しい版に更新できなくなった」ときの脱出口（開発ルール40章）
+
+  【なぜ、このページが要るのか】
+  このアプリはオフラインで動かすため、Service Worker が
+  アプリ本体をまるごと端末にしまい、**まずしまってあるほうを返します**。
+  そのため、いったん更新に失敗すると、
+  端末側からは新しい版を取りに行く手段がありません。
+    ・再読み込みしても、しまってあるほうが返ってくる
+    ・アドレスに ?v=1 のような印を足しても、
+      service-worker.js が ignoreSearch: true で照合するので、やはり同じものが返る
+  実際に iPad が v0.3.2 のまま動かなくなりました。
+
+  【なぜ、このページだけは通り抜けられるのか】
+  このページは APP_SHELL_FILES（事前にしまうファイルの一覧）に**入れていません**。
+  service-worker.js は「しまっていなければ、網の外へ取りに行く」ので、
+  このページだけは必ず新しいものが届きます。
+  ここを一覧に足すと、この脱出口そのものが塞がります。ぜったいに足さないこと。
+
+  【安全について】
+  このページは Cache Storage（アプリ本体の置き場）だけを片付けます。
+  IndexedDB（お客様の図面の実データ）には**一行も触れていません**。
+  この2つは別々の保管場所なので、図面が消えることは構造上ありえません（開発ルール5.4）。
+
+  中身はすべてこの1ファイルに書いてあります。
+  外のJSやCSSを読むと、それがしまってある古いものに化けるためです。
+-->
+<style>
+  :root { color-scheme: light; }
+  body {
+    margin: 0;
+    padding: max(16px, env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
+    background: #f5f5f5;
+    color: #111;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+    line-height: 1.7;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .lead { margin: 0 0 20px; color: #444; font-size: 15px; }
+  .card {
+    background: #fff;
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .08);
+  }
+  h2 { font-size: 17px; margin: 0 0 10px; }
+  .row { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid #eee; font-size: 15px; }
+  .row:last-child { border-bottom: none; }
+  .row .k { flex: 0 0 9em; color: #555; }
+  .row .v { flex: 1 1 auto; font-weight: 700; word-break: break-all; }
+  .ok { color: #1b6b2f; }
+  .ng { color: #b3261e; }
+  button {
+    display: block;
+    width: 100%;
+    min-height: 52px;
+    margin-top: 12px;
+    border: none;
+    border-radius: 12px;
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .primary { background: #b3261e; color: #fff; }
+  .primary:active { background: #8c1d17; }
+  .plain { background: #ececec; color: #111; }
+  .plain:active { background: #dcdcdc; }
+  button[disabled] { opacity: .5; }
+  pre {
+    margin: 12px 0 0;
+    padding: 12px;
+    background: #f0f0f0;
+    border-radius: 10px;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 40vh;
+    overflow: auto;
+  }
+  .note { font-size: 13px; color: #555; margin: 8px 0 0; }
+  a.back { display: block; margin-top: 8px; text-align: center; font-size: 15px; color: #0b5fa5; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>アプリを直す</h1>
+  <p class="lead">新しい版に切り替わらないときに使います。<br>
+    <strong>覚えている図面は消えません。</strong>アプリ本体の置き場だけを入れ直します。</p>
+
+  <div class="card">
+    <h2>今の状態</h2>
+    <div id="state"><p class="note">調べています…</p></div>
+  </div>
+
+  <div class="card">
+    <h2>直す</h2>
+    <p class="note">アプリ本体の置き場を空にして、次に開いたときに新しい版を取り直させます。
+      図面の実データには触れません。</p>
+    <button type="button" class="primary" id="fix">アプリ本体を入れ直す</button>
+    <div id="fix-result"></div>
+  </div>
+
+  <div class="card">
+    <h2>うまくいかないときは</h2>
+    <p class="note">下を押すと、新しい版を取り込む手順をこのページで実際に試して、
+      どこで失敗しているかを調べます。試した分はすぐ片付けます。</p>
+    <button type="button" class="plain" id="diag">なぜ更新できないのか調べる</button>
+    <pre id="diag-out" hidden></pre>
+    <button type="button" class="plain" id="copy" hidden>この結果をコピーする</button>
+  </div>
+
+  <a class="back" href="./">アプリにもどる</a>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var stateEl = document.getElementById('state');
+  var fixBtn = document.getElementById('fix');
+  var fixResult = document.getElementById('fix-result');
+  var diagBtn = document.getElementById('diag');
+  var diagOut = document.getElementById('diag-out');
+  var copyBtn = document.getElementById('copy');
+
+  var SHELL_PREFIX = 'dxf-viewer-shell-';
+
+  function row(k, v, cls) {
+    return '<div class="row"><span class="k">' + k + '</span>' +
+           '<span class="v ' + (cls || '') + '">' + v + '</span></div>';
+  }
+
+  function mb(n) {
+    if (typeof n !== 'number') return '不明';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  /**
+   * 網の外（サーバー）から取る。
+   *
+   * 【重要な落とし穴】これが効くのは、**事前にしまう一覧に入っていないファイルだけ**です。
+   * 一覧に入っているファイルは、?印 を足しても端末の写しが返ってきます。
+   * service-worker.js が ignoreSearch: true で照合するため、?印 が無視されるからです。
+   * （実際にここで一度間違えて、サーバーの版を古く表示していました）
+   *
+   * service-worker.js 自身は一覧に入っていないので、これで必ず新しいものが取れます。
+   */
+  function fetchFresh(path) {
+    return fetch(path + '?naosu=' + Date.now(), { cache: 'no-store' });
+  }
+
+  /** サーバー側の版を読む。version.js ではなく service-worker.js から読むこと（上記の理由）。 */
+  function readServerVersion() {
+    return fetchFresh('./service-worker.js')
+      .then(function (r) { return r.ok ? r.text() : ''; })
+      .then(function (t) {
+        var m = t.match(/CACHE_VERSION\s*=\s*'([^']+)'/);
+        return m ? m[1] : '取れませんでした';
+      })
+      .catch(function () { return '取れませんでした（通信できていません）'; });
+  }
+
+  /** service-worker.js に並んでいる「事前にしまうファイル」の一覧を読む。 */
+  function readShellList(text) {
+    var m = text.match(/APP_SHELL_FILES\s*=\s*\[([\s\S]*?)\]/);
+    if (!m) return null;
+    var out = [];
+    var re = /'([^']+)'/g;
+    var hit;
+    while ((hit = re.exec(m[1]))) out.push(hit[1]);
+    return out;
+  }
+
+  // ------------------------------------------------------------
+  // 今の状態を出す
+  // ------------------------------------------------------------
+  function show() {
+    var jobs = [];
+
+    var serverVersion = '取れませんでした';
+    jobs.push(readServerVersion().then(function (v) { serverVersion = v; }));
+
+    var cacheNames = [];
+    jobs.push(
+      (window.caches ? caches.keys() : Promise.resolve([]))
+        .then(function (k) { cacheNames = k; })
+        .catch(function () {})
+    );
+
+    var swText = 'Service Worker が使えません';
+    jobs.push(
+      (navigator.serviceWorker ? navigator.serviceWorker.getRegistrations() : Promise.resolve([]))
+        .then(function (regs) {
+          if (!regs.length) { swText = '登録されていません'; return; }
+          swText = regs.map(function (r) {
+            return '動作中=' + (r.active ? r.active.state : 'なし') +
+                   '／待機中=' + (r.waiting ? 'あり' : 'なし') +
+                   '／取込中=' + (r.installing ? 'あり' : 'なし');
+          }).join(' ｜ ');
+        })
+        .catch(function (e) { swText = 'しらべられません（' + e + '）'; })
+    );
+
+    var est = null;
+    jobs.push(
+      (navigator.storage && navigator.storage.estimate ? navigator.storage.estimate() : Promise.resolve(null))
+        .then(function (e) { est = e; })
+        .catch(function () {})
+    );
+
+    Promise.all(jobs).then(function () {
+      var kept = cacheNames
+        .filter(function (n) { return n.indexOf(SHELL_PREFIX) === 0; })
+        .map(function (n) { return n.slice(SHELL_PREFIX.length); });
+      var same = kept.length === 1 && kept[0] === serverVersion;
+
+      var html = '';
+      html += row('サーバーの版', serverVersion);
+      html += row('この端末の版', kept.length ? kept.join('、') : 'まだ何もしまっていません',
+                  same ? 'ok' : 'ng');
+      html += row('そろっているか', same ? 'そろっています' : 'ずれています', same ? 'ok' : 'ng');
+      html += row('しまい場所', cacheNames.length ? cacheNames.join('<br>') : 'なし');
+      html += row('オフラインの係', swText);
+      if (est) {
+        var pct = est.quota ? Math.round((est.usage / est.quota) * 100) : 0;
+        html += row('使っている容量', mb(est.usage) + ' ／ ' + mb(est.quota) + '（' + pct + '％）',
+                    pct >= 80 ? 'ng' : 'ok');
+      }
+      stateEl.innerHTML = html;
+    });
+  }
+
+  // ------------------------------------------------------------
+  // 直す：アプリ本体の置き場だけを空にする
+  // ------------------------------------------------------------
+  fixBtn.addEventListener('click', function () {
+    fixBtn.disabled = true;
+    fixBtn.textContent = '入れ直しています…';
+    fixResult.innerHTML = '';
+
+    var 消したもの = [];
+
+    // 1. オフラインの係を、いったん外す
+    var step1 = navigator.serviceWorker
+      ? navigator.serviceWorker.getRegistrations().then(function (regs) {
+          return Promise.all(regs.map(function (r) { return r.unregister(); }));
+        })
+      : Promise.resolve();
+
+    // 2. アプリ本体の置き場だけを消す。
+    //    DWGを読む部品（約10MB）は残す。もう一度10MBを読み直させないため（開発ルール35.3）。
+    //    IndexedDB（図面の実データ）には触れない。
+    var step2 = step1.then(function () {
+      if (!window.caches) return null;
+      return caches.keys().then(function (keys) {
+        return Promise.all(keys.map(function (k) {
+          if (k.indexOf(SHELL_PREFIX) !== 0) return null;
+          消したもの.push(k);
+          return caches.delete(k);
+        }));
+      });
+    });
+
+    step2.then(function () {
+      fixResult.innerHTML =
+        '<p class="note ok"><strong>できました。</strong>' +
+        (消したもの.length ? '（片付けたもの：' + 消したもの.join('、') + '）' : '') +
+        '<br>下の「アプリにもどる」を押してください。新しい版を取り直します。' +
+        '<br>ホーム画面のアイコンから使っている場合は、いったんアプリを終了してから開き直してください。</p>';
+      fixBtn.textContent = '入れ直しました';
+      show();
+    }).catch(function (e) {
+      fixBtn.disabled = false;
+      fixBtn.textContent = 'アプリ本体を入れ直す';
+      fixResult.innerHTML = '<p class="note ng">うまくいきませんでした：' + e + '</p>';
+    });
+  });
+
+  // ------------------------------------------------------------
+  // 調べる：新しい版を取り込む手順を、ここで実際にやってみる
+  // ------------------------------------------------------------
+  diagBtn.addEventListener('click', function () {
+    diagBtn.disabled = true;
+    diagBtn.textContent = '調べています…';
+    diagOut.hidden = false;
+
+    var 記録 = [];
+    var TEST = 'naosu-tameshi';
+
+    function 書く(s) { 記録.push(s); diagOut.textContent = 記録.join('\n'); }
+
+    書く('■ 調べた日時: ' + new Date().toLocaleString('ja-JP'));
+    書く('■ ブラウザ: ' + navigator.userAgent);
+    書く('■ ホーム画面から起動: ' +
+         (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'はい' : 'いいえ'));
+
+    fetchFresh('./service-worker.js')
+      .then(function (r) {
+        書く('■ service-worker.js の取得: ' + r.status);
+        if (!r.ok) throw new Error('service-worker.js が取れません');
+        return r.text();
+      })
+      .then(function (text) {
+        var m = text.match(/CACHE_VERSION\s*=\s*'([^']+)'/);
+        書く('■ サーバー側の版: ' + (m ? m[1] : '読み取れません'));
+        var list = readShellList(text);
+        if (!list) throw new Error('ファイル一覧を読み取れません');
+        書く('■ しまうファイル数: ' + list.length);
+
+        // (1) 本当にサーバーまで届いているかを見る。
+        //     GET だと service-worker.js が端末の写しを返してしまうので、
+        //     GET 以外（HEAD）で聞く。GET 以外は素通しされるため、必ず網の外に出る。
+        var 届かない = [];
+        var 段階1 = Promise.all(list.map(function (p) {
+          return fetch(p, { method: 'HEAD', cache: 'no-store' })
+            .then(function (res) { if (!res.ok) 届かない.push(p + ' → ' + res.status); })
+            .catch(function (e) { 届かない.push(p + ' → ' + (e && e.message ? e.message : e)); });
+        }));
+
+        // (2) この端末に、もう1組ぶんしまう余裕があるかを見る。
+        //     ここは実際に書き込むので、容量不足なら本番と同じように失敗する。
+        return 段階1.then(function () {
+          書く('■ サーバーに届かなかったファイル: ' + (届かない.length ? 届かない.length + '件' : 'なし'));
+          届かない.forEach(function (s) { 書く('   ・' + s); });
+          return caches.open(TEST);
+        }).then(function (cache) {
+          var 失敗 = [];
+          return Promise.all(list.map(function (p) {
+            return fetch(p, { cache: 'reload' })
+              .then(function (res) {
+                if (!res.ok) throw new Error('取得 ' + res.status);
+                return cache.put(p, res);
+              })
+              .catch(function (e) {
+                失敗.push(p + ' → ' + (e && e.name ? e.name + ': ' : '') + (e && e.message ? e.message : e));
+              });
+          })).then(function () { return 失敗.concat(届かない.map(function (s) { return '（届かない）' + s; })); });
+        });
+      })
+      .then(function (失敗) {
+        書く('');
+        if (!失敗.length) {
+          書く('★ 取り込みは成功しました。');
+          書く('  取り込めるのに切り替わっていないので、');
+          書く('  上の「アプリ本体を入れ直す」を押せば直ります。');
+        } else {
+          書く('★ ここで失敗しています（' + 失敗.length + '件）:');
+          失敗.forEach(function (s) { 書く('  ・' + s); });
+          書く('  QuotaExceeded と出ていれば、容量不足です。');
+        }
+      })
+      .catch(function (e) {
+        書く('');
+        書く('★ 途中で止まりました: ' + (e && e.name ? e.name + ': ' : '') + (e && e.message ? e.message : e));
+      })
+      .then(function () {
+        // 試した分は必ず片付ける（ゴミを残さない）
+        return window.caches ? caches.delete(TEST).catch(function () {}) : null;
+      })
+      .then(function () {
+        書く('');
+        書く('（試しにしまった分は片付けました）');
+        diagBtn.disabled = false;
+        diagBtn.textContent = 'もう一度調べる';
+        copyBtn.hidden = false;
+      });
+  });
+
+  copyBtn.addEventListener('click', function () {
+    var t = diagOut.textContent;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(function () {
+        copyBtn.textContent = 'コピーしました';
+      }).catch(function () {
+        copyBtn.textContent = 'コピーできませんでした（長押しで選んでください）';
+      });
+    } else {
+      copyBtn.textContent = 'コピーできません（長押しで選んでください）';
+    }
+  });
+
+  show();
+})();
+</script>
+</body>
+</html>

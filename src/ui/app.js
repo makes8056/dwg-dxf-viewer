@@ -60,6 +60,7 @@ const updateBanner = document.getElementById('update-banner');
 const updateText = document.getElementById('update-text');
 const updateApply = document.getElementById('update-apply');
 const updateClose = document.getElementById('update-close');
+const updateHelp = document.getElementById('update-help');
 
 const printArea = document.getElementById('print-area');
 const printImage = document.getElementById('print-image');
@@ -956,12 +957,36 @@ function setupUpdateBanner() {
         // 初回の準備完了。更新ではないので案内は出さない。
         return;
       }
+      updateBanner.classList.remove('is-error');
+      updateApply.hidden = false;
+      updateHelp.hidden = true;
       updateText.textContent = '新しい版があります。押すと切り替わります（今見ている図面はそのまま残ります）。';
       updateApply.onclick = () => {
         updateApply.disabled = true;
         updateApply.textContent = '切り替え中…';
         applyUpdate();
+
+        // 【開発ルール40章】押したのに何も起きないまま終わらせない。
+        // 切り替わればページごと読み直されるので、この下は動かないはず。
+        // 動いてしまったということは、切り替えに失敗したということ。
+        setTimeout(() => {
+          updateApply.hidden = true;
+          updateHelp.hidden = false;
+          updateBanner.classList.add('is-error');
+          updateText.textContent = '切り替えられませんでした。右の「直しかた」を開いてください。';
+        }, 8000);
       };
+      updateBanner.hidden = false;
+    },
+    onUpdateError: (err) => {
+      // 【開発ルール40章】更新の失敗を黙って捨てない。
+      // 捨てていたために、iPadが古い版のまま止まっていることに誰も気づけなかった。
+      console.warn('[DXFビューア] 更新できませんでした。', err);
+      if (!hadControllerAtStart) return;
+      updateBanner.classList.add('is-error');
+      updateApply.hidden = true;
+      updateHelp.hidden = false;
+      updateText.textContent = '新しい版に切り替えられませんでした。「直しかた」を開いてください。';
       updateBanner.hidden = false;
     },
     onOffline: (ready) => {
@@ -972,12 +997,24 @@ function setupUpdateBanner() {
 }
 
 async function main() {
-  await loadPartnerModules();
-  resizeCanvas();
-  watchLayoutChanges();
-  maybeShowBrowserHint();
-  await restoreLastDrawing();
+  // 【開発ルール40章】更新の見張りは、いちばん最初に始める。
+  //
+  // 以前はここが最後にあった。すると、図面の読み直しなど手前の処理が
+  // 1つでも失敗した時点で、**更新の見張りが永久に始まらない**。
+  // アプリは今までどおり動くので、誰も気づけないまま古い版に取り残される。
+  // 更新の道だけは、何があっても必ず通す。
   setupUpdateBanner();
+
+  try {
+    await loadPartnerModules();
+    resizeCanvas();
+    watchLayoutChanges();
+    maybeShowBrowserHint();
+    await restoreLastDrawing();
+  } catch (err) {
+    // ここで受け止めないと、あとに続く処理がまるごと飛ぶ。
+    console.error('[DXFビューア] 起動の途中で止まりました。', err);
+  }
 }
 
 /**

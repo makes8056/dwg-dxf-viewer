@@ -369,6 +369,36 @@ body {
   cursor: pointer;
 }
 
+/* 更新につまずいたときに出す「直しかた」（開発ルール40章）。
+ * 押せる大きさは他のボタンと同じにそろえる（開発ルール11章）。 */
+.update-help {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: bold;
+  text-decoration: underline;
+}
+
+/* 【必要】display を指定した要素は、hidden を付けても消えない。
+ * ブラウザ既定の [hidden]{display:none} を、上の display が打ち消すため。
+ * これが無いと「直しかた」が常に出たままになる。 */
+.update-help[hidden] {
+  display: none;
+}
+
+/* 更新に失敗したときは色を変える。青（お知らせ）と同じ色だと見過ごす。 */
+.update-banner.is-error {
+  background: #8c2019;
+}
+
+.update-banner.is-error .update-apply {
+  color: #8c2019;
+}
+
 /* ============================================================
  * 印刷（開発ルール26章）
  *

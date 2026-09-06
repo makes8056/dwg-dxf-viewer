@@ -195,3 +195,114 @@ test('index.html が manifest.json を読み込んでいる', () => {
   const html = read('index.html');
   assert.match(html, /rel="manifest"/, 'index.html が manifest.json を読み込んでいない');
 });
+
+// ============================================================
+// 5. 更新できなくなったときの脱出口（開発ルール40章）
+//
+// 【なぜ、ここを見張るのか】
+// 実際に iPad が v0.3.2 のまま動かなくなった。
+// アプリはキャッシュ優先で返すので、いったん更新に失敗すると
+// **端末側から新しい版を取りに行く手段が無くなる**。
+// naosu.html だけが網の外へ出られる。ここが塞がると、逃げ道が消える。
+// ============================================================
+
+test('脱出口（naosu.html）が実在する', () => {
+  assert.doesNotThrow(() => statSync(join(ROOT, 'naosu.html')), 'naosu.html が無い');
+});
+
+test('脱出口は、オフライン用の一覧に入れない', () => {
+  // 【入れると何が起きるか】
+  // 事前にしまわれ、次からはしまってあるほうが返る。
+  // つまり**脱出口そのものが古いまま固まって、逃げ道が消える。**
+  const raw = read('service-worker.js');
+  assert.doesNotMatch(
+    raw,
+    /naosu\.html/,
+    'naosu.html を APP_SHELL_FILES に入れてはいけない。逃げ道が塞がる。'
+  );
+});
+
+test('脱出口は、外のファイルを読まない（1ファイルで完結している）', () => {
+  // 外のJSやCSSを読むと、それが「しまってある古いもの」に化ける。
+  // 逃げ道の中に、逃げたい相手が混ざることになる。
+  const html = read('naosu.html');
+  assert.doesNotMatch(html, /<script[^>]+src=/i, '外のJSを読んでいる');
+  assert.doesNotMatch(html, /<link[^>]+rel=["']?stylesheet/i, '外のCSSを読んでいる');
+});
+
+test('脱出口は、図面の実データ（IndexedDB）に触れない', () => {
+  // 【これが崩れると何が起きるか】
+  // 「直す」を押しただけで、覚えている図面が全部消える。
+  // 現場で図面が消えるのは、更新できないことよりずっと重い事故である。
+  // 「触れない」と書いた説明文まで拾わないよう、実際に呼んでいる形だけを見る。
+  const html = read('naosu.html');
+  const 実行部分 = html.slice(html.indexOf('<script'));
+  assert.ok(!/indexedDB\s*[.([]/i.test(実行部分), 'IndexedDB を操作している。図面が消える');
+  assert.ok(!/deleteDatabase/i.test(実行部分), 'データベースを消そうとしている');
+});
+
+test('脱出口が消すのは、アプリ本体の置き場だけ', () => {
+  // DWGを読む部品（約10MB）まで消すと、次に開いたとき10MBの読み直しになる（35.3）。
+  // caches.delete を呼ぶ手前で、必ず名前を選り分けていること。
+  const html = read('naosu.html');
+  const 実行部分 = html.slice(html.indexOf('<script'));
+  assert.match(実行部分, /SHELL_PREFIX\s*=\s*'dxf-viewer-shell-'/, '選り分ける目印が無い');
+  const 直す = 実行部分.slice(実行部分.indexOf("fixBtn.addEventListener"));
+  const 直す本体 = 直す.slice(0, 直す.indexOf('// ---'));
+  assert.match(直す本体, /indexOf\(SHELL_PREFIX\) !== 0/, 'アプリ本体の置き場だけを選んでいない');
+  assert.doesNotMatch(直す本体, /dwg-engine/, 'DWGの部品まで消そうとしている');
+});
+
+// ============================================================
+// 6. 更新の失敗を、黙って捨てない（開発ルール40章）
+// ============================================================
+
+test('更新の見張りを、いちばん先に始めている', () => {
+  // 【後ろに置くと何が起きるか】
+  // 手前の処理が1つでも失敗すると、更新の見張りが永久に始まらない。
+  // アプリ自体は動くので、誰も気づけないまま古い版に取り残される。
+  const app = read('src/ui/app.js');
+  const i = app.indexOf('async function main()');
+  assert.ok(i >= 0, 'main() が見つからない');
+  const body = app.slice(i, app.indexOf('\n}\n', i));
+  const 見張り = body.indexOf('setupUpdateBanner()');
+  const 最初のawait = body.indexOf('await ');
+  assert.ok(見張り >= 0, 'main() の中で更新の見張りを始めていない');
+  assert.ok(
+    見張り < 最初のawait,
+    '更新の見張りが、待ち（await）より後ろにある。手前が失敗すると更新できなくなる'
+  );
+});
+
+test('更新を見に行って失敗したとき、黙って捨てていない', () => {
+  const src = read('src/update-check.js');
+  assert.doesNotMatch(
+    src,
+    /registration\.update\(\)\.catch\(\(\)\s*=>\s*\{\}\)/,
+    '失敗を捨てている。これでiPadが古い版のまま止まった'
+  );
+  assert.match(src, /onUpdateError/, '失敗を知らせる道が無い');
+});
+
+test('取り込みに失敗（redundant）したら知らせる。ただし世代交代では知らせない', () => {
+  const src = read('src/update-check.js');
+  assert.match(src, /'redundant'/, '取り込み失敗を見ていない');
+  assert.match(src, /redundant'\s*&&\s*!取り込めた/, '正常な世代交代まで失敗と呼んでしまう');
+});
+
+test('見に行くたびに、待機中の新しい版を拾い直す', () => {
+  // updatefound の合図を一度でも取りこぼすと、
+  // すでに待機中のSWには二度と合図が出ず、案内が永久に出なくなる。
+  const src = read('src/update-check.js');
+  const i = src.indexOf('function checkForUpdate');
+  const body = src.slice(i, src.indexOf('\n  }', i));
+  assert.match(body, /notifyIfWaiting\(registration\)/, '待機中を拾い直していない');
+});
+
+test('画面に「直しかた」への行き先がある', () => {
+  const html = read('index.html');
+  assert.match(html, /href="\.\/naosu\.html"/, '脱出口への行き先が画面に無い');
+  // display を指定した要素は hidden だけでは消えない。消し方を書いておくこと。
+  const css = read('src/ui/ui.css');
+  assert.match(css, /\.update-help\[hidden\]\s*\{[^}]*display\s*:\s*none/, '常に出たままになる');
+});

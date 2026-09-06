@@ -72,6 +72,9 @@
        黙って切り替えず、押されたときだけ切り替える。作業中の図面を飛ばさないため。 -->
   <div id="update-banner" class="update-banner" hidden>
     <span id="update-text" class="update-text"></span>
+    <!-- 更新につまずいたときの逃げ道（開発ルール40章）。
+         naosu.html は事前にしまわないので、必ず新しいものが届く。 -->
+    <a id="update-help" class="update-help" href="./naosu.html" hidden>直しかた</a>
     <button type="button" id="update-apply" class="update-apply">更新する</button>
     <button type="button" id="update-close" class="update-close" aria-label="あとにする">×</button>
   </div>
