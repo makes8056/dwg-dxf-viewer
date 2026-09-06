@@ -270,6 +270,36 @@ export function computePrintSize(area) {
 }
 
 /**
+ * 「印刷しない」設定の図形を外した図面を返す（開発ルール41章）。
+ *
+ * 【なぜ外すのか】
+ * CADには「画面には出すが、紙には出さない」レイヤーがある（作図の補助線など）。
+ * このアプリは今まで区別していなかったので、補助線がそのまま紙に印刷されていた。
+ * ユーザーの図面で実際に起きた。
+ *
+ * 画面の側では外さない。CADと同じで、描いている間は見えていないと困るからである。
+ * 紙に出すこの道でだけ外す。
+ *
+ * もとの図面には触らない（同じ図面を画面でも使っているため）。
+ *
+ * @param {object} drawing
+ * @returns {object} 印刷して良い図形だけの図面。外すものが無ければ、そのまま返す
+ */
+export function printableDrawing(drawing) {
+  if (!drawing || !Array.isArray(drawing.entities)) return drawing;
+  if (!drawing.entities.some((e) => e && e.noPlot)) return drawing;
+  return { ...drawing, entities: drawing.entities.filter((e) => !(e && e.noPlot)) };
+}
+
+/** 「印刷しない」設定のせいで紙に出ない図形の数（画面に知らせるため）。 */
+export function countNoPlot(drawing) {
+  if (!drawing || !Array.isArray(drawing.entities)) return 0;
+  let n = 0;
+  for (const e of drawing.entities) if (e && e.noPlot) n++;
+  return n;
+}
+
+/**
  * 囲まれた範囲を、印刷用のキャンバスに描く。
  * @param {object} drawing src/drawing.js の形の図形データ
  * @param {object} area 図面座標での範囲 { minX, minY, maxX, maxY }
@@ -278,6 +308,7 @@ export function computePrintSize(area) {
  *             orientation:string, drawn:number, limited:boolean }}
  */
 export function renderPrintCanvas(drawing, area, options = {}) {
+  drawing = printableDrawing(drawing);
   const size = computePrintSize(area);
   const { widthPx, heightPx, innerWidthPx, innerHeightPx, orientation, limited } = size;
 

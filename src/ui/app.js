@@ -22,7 +22,7 @@ import {
 import { createDrawingList } from './drawing-list.js';
 import { createPrintUi } from './print-ui.js';
 import { createPrintPreview } from './print-preview.js';
-import { createPrintImage, isAreaBigEnough } from '../print-area.js';
+import { createPrintImage, isAreaBigEnough, countNoPlot } from '../print-area.js';
 import { createPrintPdf } from '../print-pdf.js';
 import { isApplePrintShareDevice } from './device.js';
 import { createMeasureUi } from './measure-ui.js';
@@ -822,6 +822,8 @@ async function printSelectedArea(rectScreen, info = {}) {
     name: makePrintFileName(PDFで印刷する ? 'pdf' : 'png'),
     orientation: result.orientation,
     limited: result.limited,
+    // CADで「印刷しない」設定の線が何本あるかを伝える（開発ルール41章）
+    noPlotCount: countNoPlot(currentDrawing),
   });
 }
 

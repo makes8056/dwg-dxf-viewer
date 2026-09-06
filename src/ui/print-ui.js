@@ -366,7 +366,9 @@ export function createPrintUi(canvasEl, handlers = {}) {
       <div class="pr-dim" hidden></div>
       <div class="pr-actions" hidden>
         <p class="pr-hint">丸をつまむと大きさを直せます。四角の中を押したまま動かすと、範囲ごと動かせます。<br>${動かし方の案内()}（範囲は図面についてきます）。</p>
-        <button type="button" class="pr-btn pr-btn-print">この範囲を印刷</button>
+        <!-- 「PDFで保存」は、この次の確認画面にあります。
+             実機で「場所がわかりません」と言われたので、ここに書いておく（開発ルール41.5）。 -->
+        <button type="button" class="pr-btn pr-btn-print">この範囲を印刷／PDFで保存</button>
         <div class="pr-actions-row">
           <button type="button" class="pr-btn pr-btn-retry">囲み直す</button>
           <button type="button" class="pr-btn pr-btn-cancel">やめる</button>

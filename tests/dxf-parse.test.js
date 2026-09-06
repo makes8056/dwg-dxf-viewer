@@ -660,3 +660,49 @@ test('DXFから作る文字の縦位置に、Canvasが知らない名前を使�
     }
   }
 });
+
+// ============================================================
+// 印刷しないレイヤーを読み取る（開発ルール41章）
+//
+// CADには「画面には出すが、紙には出さない」レイヤーがある。
+// これを読み取っていなかったので、作図の補助線が紙に印刷されていた。
+// ============================================================
+
+test('コード290が0のレイヤーは、印刷しない扱いになる', () => {
+  const d = load('noplot-layers.dxf');
+  const hojo = d.layers.find((l) => l.name === 'HOJO');
+  assert.ok(hojo, 'HOJOレイヤーが読めていない');
+  assert.equal(hojo.noPlot, true, '290=0 を読み取れていない');
+});
+
+test('DEFPOINTS は、290が書いていなくても印刷しない', () => {
+  // AutoCADが自分で作る特別なレイヤー。名前だけで印刷されない決まりになっている。
+  const d = load('noplot-layers.dxf');
+  const def = d.layers.find((l) => l.name === 'DEFPOINTS');
+  assert.ok(def, 'DEFPOINTSレイヤーが読めていない');
+  assert.equal(def.noPlot, true, 'DEFPOINTS を印刷してしまう');
+});
+
+test('ふつうのレイヤーは、印刷する扱いのまま', () => {
+  // ここが崩れると、図面がまるごと白紙で出てくる
+  const d = load('noplot-layers.dxf');
+  const pipe = d.layers.find((l) => l.name === 'PIPE');
+  assert.ok(pipe, 'PIPEレイヤーが読めていない');
+  assert.ok(!pipe.noPlot, 'ふつうのレイヤーまで印刷しない扱いになっている');
+});
+
+test('印刷しないレイヤーの図形にも、印が付く', () => {
+  // レイヤーに印が付いていても、図形の側から引けないと印刷で使えない
+  const d = load('noplot-layers.dxf');
+  const 印つき = d.entities.filter((e) => e.noPlot).map((e) => e.layer).sort();
+  assert.deepEqual(印つき, ['DEFPOINTS', 'HOJO']);
+});
+
+test('印刷しないレイヤーでも、画面には出す', () => {
+  // 【消してはいけない理由】CADでは見えている。消すと見た目が変わる。
+  // 紙に出す道（print-area.js）だけで外す。
+  const d = load('noplot-layers.dxf');
+  assert.equal(d.entities.length, 3, '画面から消えてしまっている');
+  const hojo = d.layers.find((l) => l.name === 'HOJO');
+  assert.equal(hojo.visible, true, '画面にも出なくなっている');
+});

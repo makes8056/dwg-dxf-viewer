@@ -118,8 +118,15 @@ export function createPrintPreview(handlers = {}) {
       saveBtn.textContent = /\.pdf$/i.test(currentName) ? 'PDFで保存' : '画像で保存';
 
       const 向き = info.orientation === 'portrait' ? '縦向き' : '横向き';
+      // 【外したものは、黙って外さない（開発ルール41章）】
+      // CADで「印刷しない」設定にしてある線は紙に出さないが、
+      // 画面には出ているので、何も言わないと「消えた」と誤解される。
+      const 外した =
+        info.noPlotCount > 0
+          ? `CADで「印刷しない」設定の線 ${info.noPlotCount} 本は、紙には出しません。`
+          : '';
       note.textContent =
-        'A4' + 向き + 'いっぱいに印刷します。プリント画面の設定は、そのままでかまいません。';
+        'A4' + 向き + 'いっぱいに印刷します。プリント画面の設定は、そのままでかまいません。' + 外した;
 
       overlay.hidden = false;
       open = true;

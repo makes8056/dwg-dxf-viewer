@@ -295,9 +295,23 @@ function parseLayerTable(pairs, i, layers) {
         // 図形の側（getLayerName）も取り除いた名前で引くので、両方そろえないと
         // **色も表示・非表示も引けなくなる**（図面が真っ黒になる／消えるはずのものが出る）。
         const key = String(name).trim();
+
+        // 【印刷しないレイヤー（開発ルール41章）】
+        //
+        // CADには「画面には出すが、紙には出さない」レイヤーがある。
+        // 作図の補助線や、寸法を測るための目印がここに置かれる。
+        // 見分け方は2つあり、どちらもCADの決まりである。
+        //   1. コード290 が 0 …「このレイヤーは印刷しない」
+        //   2. 名前が DEFPOINTS … AutoCADが作る特別なレイヤーで、必ず印刷されない
+        // 書いていなければ印刷する（ふつうのレイヤー）。
+        const plotRaw = firstValue(rec.groups, 290);
+        const noPlot =
+          (plotRaw !== undefined && num(plotRaw, 1) === 0) ||
+          key.toUpperCase() === 'DEFPOINTS';
+
         // off と frozen を分けて覚えておく。
         // あとで「全部のレイヤーが非表示」というありえない状態を直すのに使う（34章）
-        layers.set(key, { name: key, color, visible, off: isOff, frozen: isFrozen });
+        layers.set(key, { name: key, color, visible, off: isOff, frozen: isFrozen, noPlot });
       }
       i = rec.nextIndex;
       continue;
@@ -1229,7 +1243,19 @@ function expandDimension(rec, drawing, ctx, blocks, layerColorMap) {
     insideDimension: true,
   };
 
+  // 【寸法から作った図形に、印を付ける（開発ルール41章）】
+  //
+  // 寸法線は、測りたい線の**すぐ横に平行に**引かれ、端も同じところで揃う。
+  // そのため「長さを測る」でタップすると、狙った線ではなく寸法線に吸い付く。
+  // 実機で「寸法線の方に引っ張られる」と言われた。
+  //
+  // ここで印を付けておけば、吸い付き先を選ぶときに後回しにできる。
+  // 展開の前後で図形の数を比べるのがいちばん確実（作る場所が何か所もあるため）。
+  const 展開する前 = drawing.entities.length;
   expandRecords(block.records, drawing, childCtx, blocks, layerColorMap);
+  for (let i = 展開する前; i < drawing.entities.length; i++) {
+    drawing.entities[i].fromDimension = true;
+  }
 }
 
 function expandInsert(rec, drawing, ctx, blocks, layerColorMap) {
@@ -1451,6 +1477,24 @@ export function parseDxf(text) {
   };
 
   expandRecords(topEntityRecords, drawing, rootCtx, blocks, layers);
+  markNoPlotEntities(drawing, layers);
 
   return finishDrawing(drawing);
+}
+
+/**
+ * 「印刷しない」レイヤーに置かれた図形に、印を付ける（開発ルール41章）。
+ *
+ * 【画面には出す。紙には出さない。】
+ * CADがそう振る舞うからである。作図の補助線は、描いている間は見えていないと困るが、
+ * 客先に渡す紙に出てしまっては困る。ユーザーの図面で実際に印刷されてしまっていた。
+ *
+ * ここでは印を付けるだけで、消しはしない。
+ * 消してしまうと画面からも無くなり、CADと見た目が変わってしまう。
+ */
+function markNoPlotEntities(drawing, layers) {
+  for (const e of drawing.entities) {
+    const layer = layers.get(e.layer);
+    if (layer && layer.noPlot) e.noPlot = true;
+  }
 }

@@ -18,6 +18,21 @@
 export const SNAP_RADIUS_PX = 34;
 
 /**
+ * 寸法線を後回しにする度合い（開発ルール41章）。
+ *
+ * 【なぜ要るのか】
+ * 寸法線は、測りたい線の**すぐ横に平行に**引かれ、端も同じところで揃っている。
+ * そのため、狙った線をタップしたつもりでも寸法線の端に吸い付く。
+ * 実機で「寸法線の方に引っ張られる」と言われた。
+ *
+ * 寸法線を吸い付き先から**外してしまうと**、
+ * 「この寸法線の端から端まで」を測りたいときに測れなくなる。
+ * そこで外さず、**本物の線より3倍ちかくないと勝てない**ようにする。
+ * 本物の線が近くにあればそちらが勝ち、寸法線しか無ければ寸法線に吸い付く。
+ */
+export const DIM_PENALTY = 3;
+
+/**
  * DXFの $INSUNITS の数字を、このアプリの単位名にする（開発ルール39.2）。
  *
  * 0（単位なし）や、知らない数字のときは 'mm' とみなす。
@@ -152,16 +167,23 @@ export function forEachSnapPoint(e, fn) {
 export function findSnapPoint(entities, x, y, maxDist) {
   if (!Array.isArray(entities) || !(maxDist > 0)) return null;
   let best = null;
-  let bestD2 = maxDist * maxDist;
+  // 「近さの点数」で比べる。実際の距離ではなく、下の重みを掛けたもの。
+  let best点数 = maxDist * maxDist;
 
   for (const e of entities) {
     if (!近くにあるか(e, x, y, maxDist)) continue;
+    // 寸法線は、本物の線より DIM_PENALTY 倍ちかくないと勝てない
+    const 重み = e.fromDimension ? DIM_PENALTY * DIM_PENALTY : 1;
     forEachSnapPoint(e, (px, py, kind) => {
       if (!Number.isFinite(px) || !Number.isFinite(py)) return;
       const d2 = (px - x) * (px - x) + (py - y) * (py - y);
-      if (d2 <= bestD2) {
-        bestD2 = d2;
-        best = { x: px, y: py, kind };
+      // 吸い付く範囲そのものは、寸法線でも変えない（範囲の外なら選ばない）
+      if (d2 > maxDist * maxDist) return;
+      const 点数 = d2 * 重み;
+      if (点数 <= best点数) {
+        best点数 = 点数;
+        // どこに合わせたかを見せるとき、寸法線だと分かるようにする（39.4）
+        best = { x: px, y: py, kind: e.fromDimension ? `寸法の${kind}` : kind };
       }
     });
   }

@@ -10,6 +10,8 @@ import {
   renderPrintCanvas,
   createPrintImage,
   isAreaBigEnough,
+  printableDrawing,
+  countNoPlot,
 } from '../src/print-area.js';
 
 // ============================================================
@@ -465,4 +467,61 @@ test('縦横どちらが短くても判定できる', () => {
 test('壊れた値（NaNなど）が来ても落ちずに「小さすぎる」扱いにする', () => {
   const result = isAreaBigEnough({ width: NaN, height: 100 });
   assert.equal(result.ok, false);
+});
+
+// ============================================================
+// 印刷しないレイヤー（開発ルール41章）
+//
+// CADには「画面には出すが、紙には出さない」レイヤーがある（作図の補助線など）。
+// これを区別していなかったので、補助線がそのまま紙に印刷されていた。
+// ユーザーの図面で実際に起きた。
+// ============================================================
+
+const 補助線あり = {
+  ...SAMPLE_DRAWING,
+  entities: [
+    { type: 'line', layer: 'PIPE', color: '#000000', x1: 0, y1: 0, x2: 100, y2: 60 },
+    { type: 'line', layer: 'HOJO', color: '#00ff00', x1: 0, y1: 30, x2: 100, y2: 30, noPlot: true },
+  ],
+};
+
+test('印刷しない設定の図形は、紙に出すぶんから外れる', () => {
+  const d = printableDrawing(補助線あり);
+  assert.equal(d.entities.length, 1, '補助線が紙に残っている');
+  assert.equal(d.entities[0].layer, 'PIPE');
+});
+
+test('もとの図面には触らない（画面からは消さない）', () => {
+  // 【消してしまうと何が起きるか】
+  // 画面からも補助線が消える。CADでは見えているので、見た目が変わってしまう。
+  // 同じ図面を画面でも使っているので、書き換えると画面まで壊れる。
+  const 元の数 = 補助線あり.entities.length;
+  printableDrawing(補助線あり);
+  assert.equal(補助線あり.entities.length, 元の数, 'もとの図面を書き換えている');
+  assert.equal(補助線あり.entities[1].noPlot, true, 'もとの印を消している');
+});
+
+test('外すものが無ければ、同じ図面をそのまま返す（むだにコピーしない）', () => {
+  assert.equal(printableDrawing(SAMPLE_DRAWING), SAMPLE_DRAWING);
+});
+
+test('こわれた入力でも落ちない', () => {
+  assert.equal(printableDrawing(null), null);
+  assert.equal(countNoPlot(null), 0);
+  assert.equal(countNoPlot({ entities: null }), 0);
+});
+
+test('何本を紙から外したかを数えられる', () => {
+  // 黙って外すと「消えた」と誤解される。画面に出すために数える。
+  assert.equal(countNoPlot(補助線あり), 1);
+  assert.equal(countNoPlot(SAMPLE_DRAWING), 0);
+});
+
+test('印刷用のキャンバスに、印刷しない図形は描かれない', () => {
+  const created = [];
+  const area = { minX: 0, minY: 0, maxX: 100, maxY: 60 };
+  const 全部 = renderPrintCanvas(SAMPLE_DRAWING, area, { createCanvas: makeCreateCanvas(created) });
+  const 補助線ぬき = renderPrintCanvas(補助線あり, area, { createCanvas: makeCreateCanvas(created) });
+  assert.equal(全部.drawn, 2, '見本の図形が2本描かれていない');
+  assert.equal(補助線ぬき.drawn, 1, '補助線まで紙に描かれている');
 });

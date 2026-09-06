@@ -48,6 +48,8 @@ export function createMeasureUi(canvasEl, handlers = {}) {
   let 案内 = null;
   let 結果 = null;
   let 結果の文字 = null;
+  let もどる = null;
+  let やり直し = null;
 
   function build() {
     root = document.createElement('div');
@@ -60,10 +62,11 @@ export function createMeasureUi(canvasEl, handlers = {}) {
       <p class="ms-guide">測りたいところを2つタップしてください<br>
         <span class="ms-guide-sub">線の端・真ん中・円の中心に吸い付きます。<br>
         細かく測るときは、2本指で拡大してからタップしてください</span></p>
-      <div class="ms-result" hidden>
+      <div class="ms-result">
         <p class="ms-result-text"></p>
         <div class="ms-buttons">
-          <button type="button" class="ms-btn ms-again">もう一度測る</button>
+          <button type="button" class="ms-btn ms-undo">1つ前にもどる</button>
+          <button type="button" class="ms-btn ms-again">はじめから</button>
           <button type="button" class="ms-btn ms-close">終わる</button>
         </div>
       </div>`;
@@ -77,7 +80,17 @@ export function createMeasureUi(canvasEl, handlers = {}) {
     結果 = root.querySelector('.ms-result');
     結果の文字 = root.querySelector('.ms-result-text');
 
-    root.querySelector('.ms-again').addEventListener('click', () => {
+    もどる = root.querySelector('.ms-undo');
+    やり直し = root.querySelector('.ms-again');
+
+    // 【1点だけ直せるようにする（開発ルール41章）】
+    // 実機で「修正ができないので何回もやり直しになる」と言われた。
+    // 2点目だけ外したときに、合っている1点目まで捨てさせない。
+    もどる.addEventListener('click', () => {
+      points.pop();
+      refresh();
+    });
+    やり直し.addEventListener('click', () => {
       points = [];
       refresh();
     });
@@ -87,6 +100,23 @@ export function createMeasureUi(canvasEl, handlers = {}) {
     window.addEventListener('resize', position);
     window.addEventListener('orientationchange', position);
     position();
+  }
+
+  // 【必ずこの形で持つこと（開発ルール41章）】
+  //
+  // 以前は、下の「終わる」ボタンから返り値の側の stop() を呼ぼうとしていた。
+  // その stop は**ここからは見えない**ので、呼ばれていたのは
+  // ブラウザが最初から持っている window.stop（ページの読み込みを止めるもの）だった。
+  //
+  // 名前が同じものが世の中にあるせいで、**エラーにもならず、静かに何も起きない。**
+  // 実機で「終わるボタンを押しても反応がない」となった。
+  // ファイルの中で呼ぶものは、ファイルの中で必ず定義する。
+  function stop() {
+    if (!active) return;
+    active = false;
+    points = [];
+    destroy();
+    handlers.onExit && handlers.onExit();
   }
 
   function destroy() {
@@ -103,6 +133,8 @@ export function createMeasureUi(canvasEl, handlers = {}) {
     案内 = null;
     結果 = null;
     結果の文字 = null;
+    もどる = null;
+    やり直し = null;
   }
 
   function onKeyDown(ev) {
@@ -169,12 +201,18 @@ export function createMeasureUi(canvasEl, handlers = {}) {
         ` ／ たて ${formatLength(Math.abs(m.dy), 単位)}` +
         ` ／ 角度 ${formatAngle(m.angleDeg)}</span>` +
         `<span class="ms-sub">合わせた先：${points[0].kind || '—'} → ${points[1].kind || '—'}</span>`;
-      結果.hidden = false;
       案内.hidden = true;
     } else {
       線.hidden = true;
       ラベル.hidden = true;
-      結果.hidden = true;
+      // 【結果の箱は隠さない（開発ルール41章）】
+      // 以前は2点そろうまで隠していた。そのため、測っている途中は
+      // **「終わる」ボタンが画面のどこにも無かった。**
+      // 抜ける道は、いつでも見えているようにする。
+      結果の文字.innerHTML =
+        points.length === 0
+          ? '<span class="ms-sub">まだ測っていません</span>'
+          : `<span class="ms-sub">1つ目：${points[0].kind || 'そのまま'}に合わせました</span>`;
       案内.hidden = false;
       案内.innerHTML =
         points.length === 0
@@ -182,8 +220,12 @@ export function createMeasureUi(canvasEl, handlers = {}) {
             '<span class="ms-guide-sub">線の端・真ん中・円の中心に吸い付きます</span>'
           : 'もう1つタップしてください<br>' +
             `<span class="ms-guide-sub">1つ目は「${points[0].kind || 'そのまま'}」に合わせました。` +
-            '2本指で拡大・縮小しても、印はそのままです</span>';
+            'ちがうところに付いたら「1つ前にもどる」で1点だけ直せます</span>';
     }
+
+    // 何も測っていないときは、戻す先も消す先も無い
+    もどる.disabled = points.length === 0;
+    やり直し.disabled = points.length === 0;
   }
 
   return {
@@ -194,13 +236,7 @@ export function createMeasureUi(canvasEl, handlers = {}) {
       build();
       refresh();
     },
-    stop() {
-      if (!active) return;
-      active = false;
-      points = [];
-      destroy();
-      handlers.onExit && handlers.onExit();
-    },
+    stop,
     isActive: () => active,
     /** タップされた場所（図面の座標）を足す。3つ目からは、新しく測り直す。 */
     addPoint(point) {

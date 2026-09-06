@@ -443,3 +443,35 @@ test('範囲の外の点は、PDFに入れない', () => {
   const r = createPrintPdf(図面, area);
   assert.equal(r.drawn, 1, '遠くの点まで持っていっている');
 });
+
+// ============================================================
+// 印刷しないレイヤーは、PDFにも入れない（開発ルール41章）
+// ============================================================
+
+test('印刷しない設定の線は、PDFの中身に入らない', () => {
+  // 【絵だけ直してPDFを忘れると何が起きるか】
+  // 確認画面（絵）からは補助線が消えるのに、**紙にだけ出る。**
+  // 印刷するまで気づけない、いちばんたちの悪いずれ方になる（36.2）。
+  const area = { minX: 0, minY: 0, maxX: 100, maxY: 100 };
+  const 図面 = 四角い図面(0, 0, 100, 100);
+
+  // 目立つ色の補助線を1本足す。この色がPDFに出てこなければ、外せている
+  図面.entities.push({
+    type: 'line', layer: 'HOJO', color: '#00ff00',
+    x1: 0, y1: 50, x2: 100, y2: 50, noPlot: true,
+  });
+
+  const r = createPrintPdf(図面, area, { createCanvas: makeFakeCanvas });
+  assert.ok(!r.error, `PDFが作れなかった：${r.error}`);
+  const 中身 = 文字にする(r.bytes);
+  // 緑（0 1 0 RG）は補助線の色。これが出ていたら紙に印刷されてしまう
+  assert.doesNotMatch(中身, /\b0 1 0 RG\b/, '印刷しない線がPDFに入っている');
+});
+
+test('ふつうの線は、今までどおりPDFに入る', () => {
+  // 上のテストが「全部消しているから通っている」だけではないことを確かめる
+  const area = { minX: 0, minY: 0, maxX: 100, maxY: 100 };
+  const r = createPrintPdf(四角い図面(0, 0, 100, 100), area, { createCanvas: makeFakeCanvas });
+  assert.ok(!r.error);
+  assert.ok(r.drawn >= 4, `ふつうの線まで消えている（${r.drawn}本）`);
+});

@@ -128,9 +128,14 @@
   color: #555555;
 }
 
+/* display を指定したので、hidden だけでは消えない（開発ルール40.7）。消し方を書いておく。 */
+.ms-result[hidden] {
+  display: none;
+}
+
 .ms-buttons {
   display: flex;
-  gap: 10px;
+  gap: 8px;
 }
 
 /* 指で押しやすい大きさを必ず確保する（開発ルール11章：1辺44px以上）。 */
@@ -138,22 +143,34 @@
   flex: 1 1 0;
   min-width: 44px;
   min-height: 48px;
+  padding: 0 4px;
   border: none;
   border-radius: 12px;
   font-family: inherit;
-  font-size: 15px;
+  /* ボタンが3つ並ぶので、文字は少し小さくする。
+   * 押せる大きさ（48px）は変えない（開発ルール11章）。 */
+  font-size: 14px;
   font-weight: 700;
+  white-space: nowrap;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
 }
 
+/* まだ測っていないときは、戻す先も消す先も無い。押せないことを見て分かるようにする。 */
+.ms-btn[disabled] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.ms-undo,
 .ms-again {
   background: #f4f4f4;
   color: #111111;
 }
 
-.ms-again:active {
+.ms-undo:not([disabled]):active,
+.ms-again:not([disabled]):active {
   background: #e6e6e6;
 }
 

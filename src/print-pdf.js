@@ -29,7 +29,7 @@
 //                                       実物の図面では「北 南 東 西 上 下」など
 //                                       ごく少数なので、これで十分に軽い。
 
-import { computePrintPlacement, PRINT_LINE_WIDTH_MM } from './print-area.js';
+import { computePrintPlacement, PRINT_LINE_WIDTH_MM, printableDrawing } from './print-area.js';
 
 /** 1ミリは何ポイントか。PDFの長さの単位はポイント（1/72インチ）。 */
 export const PT_PER_MM = 72 / 25.4;
@@ -401,6 +401,8 @@ export function createPrintPdf(drawing, area, options = {}) {
     if (!drawing || !Array.isArray(drawing.entities)) {
       return { error: ERROR_CANNOT_CREATE };
     }
+    // 「印刷しない」設定の図形は、紙にもPDFにも出さない（開発ルール41章）
+    drawing = printableDrawing(drawing);
 
     const 置き方 = computePrintPlacement(area);
     const { orientation } = 置き方;
