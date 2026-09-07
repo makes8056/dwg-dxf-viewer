@@ -9,7 +9,7 @@
 //   3. INSERT（部品の配置）は、その場で line / arc などに展開する（開発ルール10.4）
 //   4. 色は drawing.js の aciToCss() / rgbToCss() だけを使う（色の表はここでは作らない）
 //
-// 対応できない図形（SPLINE・HATCHなど）は countUnsupported() で数える（10.5：黙って捨てない）。
+// 対応できない図形（3DFACE・MLINEなど）は countUnsupported() で数える（10.5：黙って捨てない）。
 
 import {
   createDrawing,
@@ -25,6 +25,7 @@ import {
   bulgePoints,
   hatchToLines,
 } from './hatch.js';
+import { splineToPolyline } from './spline.js';
 import { insunitsToUnits } from './measure.js';
 
 // ============================================================
@@ -969,6 +970,66 @@ function convertOldPolyline(headerRec, vertexRecs, drawing, ctx, layerColorMap) 
   }
 }
 
+/**
+ * SPLINE（自由曲線）を、折れ線に直して図面に足す（開発ルール45章）。
+ *
+ * 曲線の計算そのものは `src/spline.js` にある。ここはDXFの読み取りだけを受け持つ。
+ *
+ * 【グループコードは並び順に意味がある】
+ *   40（ノット）・41（重み）・10,20（制御点）・11,21（通過点）は
+ *   それぞれ何度も出てくる。**出てきた順にそのまま並べないと形が変わる。**
+ *
+ * @returns {boolean} 描けたら true。描けなければ false（呼んだ側が数える）
+ */
+function convertSpline(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = effectiveLayer(g, ctx);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+
+  const flags = num(firstValue(g, 70), 0);
+  const closed = (flags & 1) === 1;
+  const degree = num(firstValue(g, 71), 3);
+
+  const knots = [];
+  const weights = [];
+  const controlPoints = [];
+  const fitPoints = [];
+  let ctrl = null;
+  let fitPt = null;
+
+  for (const [code, value] of g) {
+    if (code === 40) {
+      knots.push(num(value));
+    } else if (code === 41) {
+      weights.push(num(value, 1));
+    } else if (code === 10) {
+      ctrl = [flipXIf(flip, num(value)), 0];
+      controlPoints.push(ctrl);
+    } else if (code === 20 && ctrl) {
+      ctrl[1] = num(value);
+    } else if (code === 11) {
+      fitPt = [flipXIf(flip, num(value)), 0];
+      fitPoints.push(fitPt);
+    } else if (code === 21 && fitPt) {
+      fitPt[1] = num(value);
+    }
+  }
+
+  const result = splineToPolyline({
+    degree,
+    controlPoints,
+    knots,
+    weights: weights.length ? weights : null,
+    fitPoints,
+    closed,
+  });
+  if (!result) return false;
+
+  emitPolyline(drawing, ctx, layer, color, result.points, result.closed);
+  return true;
+}
+
 // SOLID：4点。3点目と4点目が同じなら三角形（開発ルールの指示どおり）
 /**
  * HATCH（ハッチング）の中身を読み解く（開発ルール38章）。
@@ -1391,6 +1452,12 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
         convertSolid(rec, drawing, ctx, layerColorMap);
       } else if (rec.type === 'HATCH') {
         convertHatch(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'SPLINE') {
+        // 自由曲線は折れ線に直して、いつもの道に乗せる（開発ルール45章）。
+        // 制御点が1つも無いなど、どうしても形にならないものだけ数える。
+        if (!convertSpline(rec, drawing, ctx, layerColorMap)) {
+          countUnsupported(drawing, 'SPLINE（形が読み取れない）');
+        }
       } else if (rec.type === 'POINT' && !ctx.insideDimension) {
         // 寸法の中の点は下で外している。ここは図面に置かれたふつうの点
         convertPoint(rec, drawing, ctx, layerColorMap);
@@ -1411,7 +1478,7 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
         // **本当に足りていない図形が埋もれてしまいます。** そのため数えません。
         // 図面の見た目は何も変わりません。
       } else {
-        // SPLINE / 3DFACE / MLINE など
+        // 3DFACE / MLINE など
         // → 開発ルール10.5：黙って捨てず、種類ごとに数える
         countUnsupported(drawing, rec.type || '不明');
       }

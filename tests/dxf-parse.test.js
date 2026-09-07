@@ -164,13 +164,36 @@ test('24ビットの色指定（true color）も読める', () => {
 
 test('対応していない図形は、捨てずに種類ごとに数える', () => {
   // 黙って消すと、現場で図面が欠けていることに気づけない。これがいちばん危ない。
+  const dxf = [
+    '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'LINE', '8', '0', '62', '7', '10', '0.0', '20', '0.0', '11', '10.0', '21', '0.0',
+    // まだ対応していない種類（45章の時点では 3DFACE と MLINE が残っている）
+    '0', '3DFACE', '8', '0', '62', '7',
+    '10', '0.0', '20', '0.0', '11', '10.0', '21', '0.0', '12', '10.0', '22', '10.0',
+    '0', 'MLINE', '8', '0', '62', '7', '10', '0.0', '20', '0.0',
+    '0', 'MLINE', '8', '0', '62', '7', '10', '5.0', '20', '5.0',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  assert.equal(d.entities.length, 1, '対応している図形（直線）が残っていない');
+  assert.equal(d.unsupported.count, 3);
+  assert.equal(d.unsupported.kinds['3DFACE'], 1);
+  assert.equal(d.unsupported.kinds.MLINE, 2);
+});
+
+test('もう対応した図形は、「表示できませんでした」に数えない（18.4）', () => {
+  // 対応済みなのに数え続けると、案内がうそになる。
+  // このファイルには 直線1・自由曲線2・囲いの無いハッチング1・楕円1 が入っている。
   const d = load('unsupported.dxf');
-  // 直線1本 ＋ 楕円1個（v0.1.6で対応した）
-  assert.equal(d.entities.length, 2, '対応している図形が残っていない');
-  assert.equal(d.unsupported.count, 2);
-  assert.equal(d.unsupported.kinds.SPLINE, 2);
+  assert.equal(d.unsupported.count, 0, `まだ数えている: ${JSON.stringify(d.unsupported.kinds)}`);
+  assert.equal(d.unsupported.kinds.SPLINE, undefined, '自由曲線はもう対応している（45章）');
   assert.equal(d.unsupported.kinds.ELLIPSE, undefined, '楕円はもう対応しているので数えない');
   assert.equal(d.unsupported.kinds.HATCH, undefined, 'ハッチングはもう対応している（38章）');
+  // 直線1 ＋ 自由曲線2（折れ線になる） ＋ 楕円1
+  assert.equal(only(d, 'polyline').length, 2, '自由曲線が折れ線として出ていない');
+  assert.equal(only(d, 'line').length, 1);
+  assert.equal(only(d, 'ellipse').length, 1);
 });
 
 // ============================================================
@@ -705,4 +728,163 @@ test('印刷しないレイヤーでも、画面には出す', () => {
   assert.equal(d.entities.length, 3, '画面から消えてしまっている');
   const hojo = d.layers.find((l) => l.name === 'HOJO');
   assert.equal(hojo.visible, true, '画面にも出なくなっている');
+});
+
+// ============================================================
+// 自由曲線（SPLINE）45章
+//
+// 「線が出ている」だけでは何も守れない（43.6の反省）。
+// ここでは **その形でなければ図面が間違って表示される値** を数字で押さえる。
+// ============================================================
+
+test('自由曲線は、折れ線（polyline）として出る。新しい種類を増やさない', () => {
+  // 種類を増やすと、画面・印刷の絵・PDFの3か所すべてに描き方を足すことになり、
+  // 1つ忘れると「画面には出るのに紙に出ない」が起きる（36.2・43.1）
+  const d = load('spline.dxf');
+  assert.equal(d.unsupported.count, 0, `自由曲線が数えられている: ${JSON.stringify(d.unsupported.kinds)}`);
+  assert.equal(d.entities.length, 3, '自由曲線3本が出ていない');
+  for (const e of d.entities) {
+    assert.equal(e.type, 'polyline', `折れ線以外の種類が作られている: ${e.type}`);
+  }
+});
+
+test('重み付きの自由曲線が、ぴったり正しい形になる（半径で検算する）', () => {
+  // 重み cos45度 の3点・次数2の曲線は、**数学的にぴったり四分円**になる。
+  // だから「それらしい」ではなく、中心からの距離で1点ずつ検算できる。
+  // 重み（41）を読み落とすと、ここがふくらんで別の形になる。
+  const d = load('spline.dxf');
+  const 曲線 = d.entities[0];
+
+  assert.ok(曲線.points.length >= 8, `点が ${曲線.points.length} 個しかなく、曲線に見えない`);
+  for (const [x, y] of 曲線.points) {
+    const r = Math.hypot(x, y);
+    assert.ok(Math.abs(r - 100) < 1e-6, `半径100の円の上に乗っていない（半径 ${r}）`);
+  }
+  // 両端は、最初と最後の制御点そのもの
+  near(曲線.points[0][0], 100, '始点のX');
+  near(曲線.points[0][1], 0, '始点のY');
+  near(曲線.points.at(-1)[0], 0, '終点のX');
+  near(曲線.points.at(-1)[1], 100, '終点のY');
+  // 曲線なので、まん中は弦よりふくらむ（直線で結んでいないことの確認）
+  const まん中 = 曲線.points[Math.floor(曲線.points.length / 2)];
+  near(まん中[0], 100 / Math.SQRT2, 'まん中のX（45度の位置）');
+  near(まん中[1], 100 / Math.SQRT2, 'まん中のY（45度の位置）');
+});
+
+test('ノットが書かれていない自由曲線も、捨てずに描く', () => {
+  // ノット（目盛り）が無い・数が合わないDXFは実際にある。
+  // 自分で目盛りを作れば描けるので、「表示できませんでした」にしない。
+  const d = load('spline.dxf');
+  const 曲線 = d.entities[1];
+  assert.ok(曲線.points.length >= 8, '曲線になっていない');
+  // 目盛りを自分で作ると、曲線は最初と最後の制御点をきっちり通る
+  near(曲線.points[0][0], 0, '始点のX');
+  near(曲線.points[0][1], 200, '始点のY');
+  near(曲線.points.at(-1)[0], 100, '終点のX');
+  near(曲線.points.at(-1)[1], 200, '終点のY');
+  // 制御点は曲線を引っぱるだけなので、曲線は制御点の外へは出ない
+  for (const [x, y] of 曲線.points) {
+    assert.ok(x >= -1e-9 && x <= 100 + 1e-9, `制御点の範囲より外へ出ている（X=${x}）`);
+    assert.ok(y >= 200 - 1e-9 && y <= 260 + 1e-9, `制御点の範囲より外へ出ている（Y=${y}）`);
+  }
+});
+
+test('制御点が無く通過点だけの自由曲線は、通過点をつないで出す', () => {
+  // なめらかさは出ないが、**何も出ないよりはるかによい**（10.5：黙って捨てない）
+  const d = load('spline.dxf');
+  const 曲線 = d.entities[2];
+  assert.deepEqual(曲線.points, [[0, 400], [50, 450], [100, 400]]);
+});
+
+test('閉じた自由曲線（周期式）が、ちゃんと1周して閉じる', () => {
+  // 制御点が1周ぶんしか書かれていない書き方。自分で1周させないと、
+  // **輪の一部が欠けたまま**画面にも紙にも出る（45章の落とし穴）。
+  const d = load('spline-closed.dxf');
+  assert.equal(d.entities.length, 1);
+  const 輪 = d.entities[0];
+  assert.equal(輪.type, 'polyline');
+  assert.equal(輪.closed, true, '閉じた曲線になっていない');
+
+  // 制御点は (0,0)(100,0)(100,100)(0,100) の正方形。
+  // 3次の閉じた曲線は、その正方形の内側に、上下左右つりあった形で入る。
+  const xs = 輪.points.map((p) => p[0]);
+  const ys = 輪.points.map((p) => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  assert.ok(minX > 0 && minY > 0 && maxX < 100 && maxY < 100,
+    `制御点の正方形からはみ出している（${minX}, ${minY}, ${maxX}, ${maxY}）`);
+  // つりあっていること（1周できていないと、ここが必ず崩れる）
+  near(minX, minY, '左端と下端がつりあっていない');
+  near(maxX, maxY, '右端と上端がつりあっていない');
+  near(minX + maxX, 100, '左右がまん中でつりあっていない');
+  near(minY + maxY, 100, '上下がまん中でつりあっていない');
+});
+
+test('自由曲線が、図面の範囲（bounds）にちゃんと入る', () => {
+  // 範囲に入らないと、開いたときに図面が画面に収まらない
+  const d = load('spline.dxf');
+  assert.ok(d.bounds.maxY >= 449, `曲線が範囲に入っていない: ${JSON.stringify(d.bounds)}`);
+  assert.ok(d.bounds.minX <= 0 && d.bounds.maxX >= 100);
+});
+
+test('自由曲線が、ブロックの中でも展開されて出る', () => {
+  // 実物の図面（参考図.dxf）では、自由曲線は**ブロックの中**に入っていた。
+  // ここが効かないと、部品の中の曲線だけが消える。
+  const dxf = [
+    '0', 'SECTION', '2', 'BLOCKS',
+    '0', 'BLOCK', '2', 'ベント', '10', '0.0', '20', '0.0',
+    '0', 'SPLINE', '8', '0', '62', '7',
+    '70', '8', '71', '3', '72', '8', '73', '4', '74', '0',
+    '40', '0', '40', '0', '40', '0', '40', '0', '40', '1', '40', '1', '40', '1', '40', '1',
+    '10', '0.0', '20', '0.0', '10', '0.0', '20', '10.0',
+    '10', '10.0', '20', '10.0', '10', '10.0', '20', '0.0',
+    '0', 'ENDBLK',
+    '0', 'ENDSEC',
+    '0', 'SECTION', '2', 'ENTITIES',
+    // (100,200) に置く
+    '0', 'INSERT', '8', '0', '62', '7', '2', 'ベント', '10', '100.0', '20', '200.0',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  assert.equal(d.unsupported.count, 0, `ブロックの中の曲線が数えられている: ${JSON.stringify(d.unsupported.kinds)}`);
+  const 曲線 = only(d, 'polyline');
+  assert.equal(曲線.length, 1, 'ブロックの中の自由曲線が出ていない');
+  // 置いた場所ぶんだけ、ちゃんとずれていること
+  near(曲線[0].points[0][0], 100, '差し込み位置のXが効いていない');
+  near(曲線[0].points[0][1], 200, '差し込み位置のYが効いていない');
+  near(曲線[0].points.at(-1)[0], 110, '終点のX');
+  near(曲線[0].points.at(-1)[1], 200, '終点のY');
+});
+
+test('「見えない」指定の自由曲線は、描かないし数えもしない', () => {
+  // 動的ブロックは、使わない形の図形に「見えない」印を付けて持っている。
+  // 実物の参考図.dxf の自由曲線2本のうち、1本がまさにこれだった。
+  const dxf = [
+    '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'LINE', '8', '0', '62', '7', '10', '0.0', '20', '0.0', '11', '10.0', '21', '0.0',
+    '0', 'SPLINE', '8', '0', '62', '7', '60', '1',
+    '70', '8', '71', '3', '72', '0', '73', '4', '74', '0',
+    '10', '0.0', '20', '0.0', '10', '0.0', '20', '10.0',
+    '10', '10.0', '20', '10.0', '10', '10.0', '20', '0.0',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  assert.equal(only(d, 'polyline').length, 0, '見えない指定の曲線を描いている');
+  assert.equal(d.unsupported.count, 0, 'もともと出ないものを「表示できませんでした」に数えている');
+});
+
+test('形にならない自由曲線は、黙って捨てずに数える', () => {
+  // 制御点も通過点も無い壊れたSPLINE。描けないので、黙って消さずに報告する（10.5）
+  const dxf = [
+    '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'SPLINE', '8', '0', '62', '7', '70', '8', '71', '3', '72', '0', '73', '0', '74', '0',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  assert.equal(d.entities.length, 0);
+  assert.equal(d.unsupported.count, 1, '描けなかった曲線を黙って捨てている');
+  assert.equal(d.unsupported.kinds['SPLINE（形が読み取れない）'], 1);
 });
