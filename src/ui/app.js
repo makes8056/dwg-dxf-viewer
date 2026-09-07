@@ -721,6 +721,8 @@ const measureUi = createMeasureUi(canvas, {
   get units() {
     return (currentDrawing && currentDrawing.units) || 'mm';
   },
+  // 印をつまんで動かしている間、指の位置を「きりのよい点」に直す（開発ルール42章）
+  snapAt,
   onExit: () => { /* モードから抜けただけ。何もしない */ },
 });
 
@@ -732,15 +734,32 @@ const measureUi = createMeasureUi(canvas, {
  * 近くに何も無ければ、タップした場所をそのまま使う。
  */
 function onMeasureTap(screenX, screenY) {
+  const p = snapAt(screenX, screenY);
+  if (p) measureUi.addPoint(p);
+}
+
+/**
+ * 画面の位置を、いちばん近い「きりのよい点」に直す（開発ルール39.1・42章）。
+ *
+ * タップのときと、印をつまんで動かすときの**両方でこれを使う**。
+ * 2か所に同じ計算を書くと、片方だけ直したときに
+ * 「タップでは吸い付くのに、動かすと吸い付かない」というちぐはぐが起きる。
+ *
+ * @param {number} screenX キャンバスの左上を基準にした位置
+ * @param {number} screenY
+ * @returns {{x:number, y:number, kind:string}|null} 図面が無いときは null
+ */
+function snapAt(screenX, screenY) {
   const vp = ensureViewport();
-  if (!vp || !viewportMod || !currentDrawing) return;
+  if (!vp || !viewportMod || !currentDrawing) return null;
 
   const [x, y] = viewportMod.toDrawing(vp, screenX, screenY);
   // 吸い付く範囲は「画面で何ピクセルか」で決める。
   // 図面の座標に直すには、今の拡大率で割る（拡大すると細かく狙える）
   const 範囲 = SNAP_RADIUS_PX / (vp.scale || 1);
   const 吸い付き = findSnapPoint(currentDrawing.entities, x, y, 範囲);
-  measureUi.addPoint(吸い付き || { x, y, kind: 'そのまま' });
+  // 近くに何も無ければ、指した場所をそのまま使う
+  return 吸い付き || { x, y, kind: 'そのまま' };
 }
 
 /**

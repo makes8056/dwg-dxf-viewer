@@ -376,12 +376,97 @@ test('「終わる」ボタンは、測っている途中でも画面にある',
   );
 });
 
-test('1点だけやり直せる道がある', () => {
-  // 実機で「修正ができないので何回もやり直しになる」と言われた
-  // 【ゆるく見てはいけない】「ms-undo」という字を探すだけだと、
-  // ボタンを消しても querySelector('.ms-undo') の行が残っていて通ってしまう。
-  // 実際のボタンの書き方そのものを見る。
+
+// ============================================================
+// 印をつまんで動かす（開発ルール42章）
+//
+// 【実機で言われたこと】
+// 「ひとつ前に戻るではなく、そのポインターを移動できるようにしたい」
+// ずれているのは位置だけなので、位置だけ直せるほうが手数が少ない。
+// ============================================================
+
+test('測った印を、つまんで動かせる', () => {
   const ui = read('src/ui/measure-ui.js');
-  assert.match(ui, /<button[^>]*class="ms-btn ms-undo"[^>]*>/, '「1つ前にもどる」ボタンが無い');
-  assert.match(ui, /points\.pop\(\)/, '1点だけ戻す処理が無い');
+  assert.match(ui, /addEventListener\('pointerdown', \(ev\) => つまむ/, 'つまむ処理が無い');
+  assert.match(ui, /points\[つまみ中\.index\] =/, '動かした先を覚えていない');
+});
+
+test('動かしている間も、吸い付きが効く', () => {
+  // 【これが無いと意味が無い】
+  // 指を置いた場所をそのまま使うと、動かすたびに1ミリ単位でずれる。
+  // タップのときと同じ道（snapAt）を通すこと。
+  const ui = read('src/ui/measure-ui.js');
+  assert.match(ui, /handlers\.snapAt\(/, '動かすときに吸い付かせていない');
+
+  // タップと動かすで、同じ計算を使うこと。
+  // 2か所に書くと、片方だけ直したときにちぐはぐになる
+  const app = read('src/ui/app.js');
+  assert.match(app, /function snapAt\(/, '吸い付きの計算が1か所にまとまっていない');
+  const tap = app.slice(app.indexOf('function onMeasureTap'), app.indexOf('function snapAt'));
+  assert.match(tap, /snapAt\(/, 'タップが同じ計算を使っていない');
+});
+
+test('丸だけが指を受け取る（図面の拡大縮小を邪魔しない）', () => {
+  const css = read('src/ui/measure-ui.css');
+  const i = css.indexOf('.ms-dot {');
+  const 丸 = css.slice(i, css.indexOf('}', i));
+  assert.match(丸, /pointer-events:\s*auto/, '丸が指を受け取らない。つまめない');
+  assert.match(丸, /touch-action:\s*none/, '動かしている間に画面まで動いてしまう');
+});
+
+test('丸の上で2本指を始めたら、つまむのをやめて拡大縮小に譲る', () => {
+  // 【32章・33章で作った拡大縮小を、作り直さないための決まり】
+  // 丸が指を受け取るようにした以上、ここを外すと丸の上でピンチできなくなる。
+  const ui = read('src/ui/measure-ui.js');
+  const i = ui.indexOf('function 二本目が来た');
+  assert.ok(i >= 0, '2本目の指を見張っていない');
+  const 見張り = ui.slice(i, ui.indexOf('function 動かす'));
+  assert.match(見張り, /はなす\(\)/, '2本目が来ても譲っていない');
+});
+
+test('画面を閉じたら、window に付けた見張りも外す', () => {
+  // 外し忘れると閉じたあとも残り続ける（触っていないのに動く不具合のもと）
+  const ui = read('src/ui/measure-ui.js');
+  const i = ui.indexOf('function destroy()');
+  const destroy = ui.slice(i, ui.indexOf('function onKeyDown'));
+  assert.match(destroy, /はなす\(\)/, '見張りを外していない');
+  assert.match(ui, /removeEventListener\('pointerdown', 二本目が来た/, '外す処理そのものが無い');
+});
+
+test('丸は、指で押せる大きさの当たり判定を持つ', () => {
+  // 見た目は16px。丸を大きくすると、どこを測っているのか分からなくなるので、
+  // 当たり判定だけを外へ広げる（開発ルール11章：44px以上）
+  const css = read('src/ui/measure-ui.css');
+  const i = css.indexOf('.ms-dot::before');
+  assert.ok(i >= 0, '当たり判定を広げていない');
+  const body = css.slice(i, css.indexOf('}', i));
+
+  // 【inset で書かせない（開発ルール42.4）】
+  // このアプリは box-sizing: border-box なので、inset は中身からの距離になる。
+  // width:16px の中身は10pxしかなく、-14px と書いても38pxにしかならない。
+  // 実測して気づいた。大きさを直接書けば、box-sizing に左右されない。
+  assert.doesNotMatch(body, /inset:/, 'inset で広げている。box-sizing のぶんだけ小さくなる');
+
+  const w = body.match(/width:\s*(\d+)px/);
+  const h = body.match(/height:\s*(\d+)px/);
+  assert.ok(w && h, '当たり判定の大きさを直接書いていない');
+  assert.ok(Number(w[1]) >= 44, `当たり判定の横が ${w[1]}px しかない。指で狙えない`);
+  assert.ok(Number(h[1]) >= 44, `当たり判定の縦が ${h[1]}px しかない。指で狙えない`);
+});
+
+test('画面の向きが変わったら、キャンバスの大きさを見て置き直す', () => {
+  // 【イベント頼みにすると取りこぼす（開発ルール42.5）】
+  // 向きを変えた直後は、resize が届いた時点でキャンバスがまだ古い大きさのことがある。
+  // 実測で、幅を768pxにしたあとも枠が1280pxのまま取り残され、
+  // **「終わる」ボタンの右端が846px（画面は768px）で画面の外へ出た。**
+  const ui = read('src/ui/measure-ui.js');
+  assert.match(ui, /new ResizeObserver\(/, 'キャンバスの大きさを見張っていない');
+  assert.match(ui, /大きさの見張り\.observe\(canvasEl\)/, '見張る相手がキャンバスでない');
+});
+
+test('画面を閉じたら、大きさの見張りも止める', () => {
+  const ui = read('src/ui/measure-ui.js');
+  const i = ui.indexOf('function destroy()');
+  const destroy = ui.slice(i, ui.indexOf('function onKeyDown'));
+  assert.match(destroy, /大きさの見張り\.disconnect\(\)/, '見張りを止めていない');
 });

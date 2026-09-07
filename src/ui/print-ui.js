@@ -321,6 +321,8 @@ export function createPrintUi(canvasEl, handlers = {}) {
   // DOM。start() のたびに作り、stop() のたびに消す（開発ルール26.4：抜けたら板を必ず取り除く）
   // ------------------------------------------------------------
   let board = null;
+  /** キャンバスの大きさを見張る係（開発ルール42.5）。 */
+  let 大きさの見張り = null;
   let guideEl = null;
   let selectEl = null;
   let dimEl = null;
@@ -403,6 +405,18 @@ export function createPrintUi(canvasEl, handlers = {}) {
     document.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', positionBoard);
     window.addEventListener('orientationchange', positionBoard);
+
+    // 【イベント頼みにしない（開発ルール42.5）】
+    // 画面の向きを変えた直後は、resize が届いた時点でまだ
+    // キャンバスが古い大きさのことがある。そのとき板だけが取り残され、
+    // 「この範囲を印刷」が画面の外へ出てしまう。
+    // 測る画面と同じく、キャンバスの大きさを直接見張る。
+    if (typeof ResizeObserver === 'function') {
+      大きさの見張り = new ResizeObserver(() => {
+        requestAnimationFrame(positionBoard);
+      });
+      大きさの見張り.observe(canvasEl);
+    }
   }
 
   function removeDom() {
@@ -420,6 +434,10 @@ export function createPrintUi(canvasEl, handlers = {}) {
     document.removeEventListener('keydown', onKeyDown);
     window.removeEventListener('resize', positionBoard);
     window.removeEventListener('orientationchange', positionBoard);
+    if (大きさの見張り) {
+      大きさの見張り.disconnect();
+      大きさの見張り = null;
+    }
 
     board.remove();
     board = null;

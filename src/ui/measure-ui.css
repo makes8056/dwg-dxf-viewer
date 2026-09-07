@@ -7,9 +7,9 @@
  *   範囲を囲む画面45 より後ろ（この2つは同時には出ません）。
  *
  * 【いちばん大事なこと】
- * この画面の部品は、**指をいっさい受け取りません**（pointer-events: none）。
+ * この画面の部品は、原則として**指を受け取りません**（pointer-events: none）。
  * 受け取ってしまうと、2本指の拡大縮小や図面の移動ができなくなります。
- * ボタンだけは受け取ります。
+ * 受け取るのはボタンと、測った丸だけです（丸はつまんで動かすため。42章）。
  */
 
 .ms-root {
@@ -34,7 +34,7 @@
   stroke-dasharray: 7 4;
 }
 
-/* 測った点の印 */
+/* 測った点の印。**つまんで動かせる**（開発ルール42章） */
 .ms-dot {
   position: absolute;
   width: 16px;
@@ -44,7 +44,41 @@
   border-radius: 50%;
   background: #ffffff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-  pointer-events: none;
+  /* 【ここだけ指を受け取る】
+   * .ms-root は指を素通しさせている（39章）。丸だけが受け取り、
+   * それ以外は今までどおり図面の拡大縮小・移動に流れる。 */
+  pointer-events: auto;
+  /* 指で動かしている間に、画面がスクロールしたり拡大したりしないように */
+  touch-action: none;
+  cursor: grab;
+}
+
+/* 【見た目は16pxのまま、指で押せる大きさ（44px）を確保する】
+ * 丸を大きくすると、どこを測っているのか分からなくなる。
+ * 当たり判定だけを外へ広げる（開発ルール11章）。
+ *
+ * 【inset で広げてはいけない（開発ルール42.4）】
+ * このアプリは全体に box-sizing: border-box を掛けている（ui.css）。
+ * そのため width:16px には枠線3px×2が含まれ、中身は10pxしかない。
+ * inset は中身からの距離なので、-14px と書いても 10+28=38px にしかならず、
+ * **44pxのつもりが38pxになる。** 実測して気づいた。
+ * 大きさを直接書けば、box-sizing に左右されない。 */
+.ms-dot::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+}
+
+/* つまんでいる間は、指の下でも分かるように目立たせる */
+.ms-dot-tsumami {
+  cursor: grabbing;
+  border-color: #8c1d17;
+  box-shadow: 0 0 0 6px rgba(209, 43, 43, 0.25), 0 1px 4px rgba(0, 0, 0, 0.4);
 }
 
 /* 長さの文字（線の真ん中に出す） */
@@ -143,13 +177,11 @@
   flex: 1 1 0;
   min-width: 44px;
   min-height: 48px;
-  padding: 0 4px;
+  padding: 0 8px;
   border: none;
   border-radius: 12px;
   font-family: inherit;
-  /* ボタンが3つ並ぶので、文字は少し小さくする。
-   * 押せる大きさ（48px）は変えない（開発ルール11章）。 */
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
   white-space: nowrap;
   cursor: pointer;
@@ -163,13 +195,11 @@
   cursor: default;
 }
 
-.ms-undo,
 .ms-again {
   background: #f4f4f4;
   color: #111111;
 }
 
-.ms-undo:not([disabled]):active,
 .ms-again:not([disabled]):active {
   background: #e6e6e6;
 }

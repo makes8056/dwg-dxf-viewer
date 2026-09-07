@@ -12,8 +12,10 @@
 //   板をかぶせると、その拡大縮小をもう一度作り直すことになる（32章・33章）。
 //   **動いているものを作り直さない。**
 //
-//   そのため、この画面の部品はすべて `pointer-events: none` にして、
-//   指をいっさい受け取らない（ボタンだけは受け取る）。
+//   そのため、この画面の部品は原則 `pointer-events: none` にして、指を素通しさせる。
+//   受け取るのは**ボタンと、測った丸だけ**。
+//   丸は「つまんで動かす」ために受け取る（42章）。丸の上で2本指を始められたときは、
+//   つまむのをやめて拡大縮小に譲る。
 //
 // 【図面を動かしたら、印も一緒に動かす】
 //   印は画面の座標で置いてあるので、拡大縮小や移動のたびに置き直す必要がある。
@@ -48,8 +50,9 @@ export function createMeasureUi(canvasEl, handlers = {}) {
   let 案内 = null;
   let 結果 = null;
   let 結果の文字 = null;
-  let もどる = null;
   let やり直し = null;
+  /** キャンバスの大きさを見張る係（42.5）。 */
+  let 大きさの見張り = null;
 
   function build() {
     root = document.createElement('div');
@@ -65,7 +68,6 @@ export function createMeasureUi(canvasEl, handlers = {}) {
       <div class="ms-result">
         <p class="ms-result-text"></p>
         <div class="ms-buttons">
-          <button type="button" class="ms-btn ms-undo">1つ前にもどる</button>
           <button type="button" class="ms-btn ms-again">はじめから</button>
           <button type="button" class="ms-btn ms-close">終わる</button>
         </div>
@@ -80,16 +82,21 @@ export function createMeasureUi(canvasEl, handlers = {}) {
     結果 = root.querySelector('.ms-result');
     結果の文字 = root.querySelector('.ms-result-text');
 
-    もどる = root.querySelector('.ms-undo');
     やり直し = root.querySelector('.ms-again');
 
-    // 【1点だけ直せるようにする（開発ルール41章）】
-    // 実機で「修正ができないので何回もやり直しになる」と言われた。
-    // 2点目だけ外したときに、合っている1点目まで捨てさせない。
-    もどる.addEventListener('click', () => {
-      points.pop();
-      refresh();
+    // 【印をつまんで動かせるようにする（開発ルール42章）】
+    // 以前は「1つ前にもどる」で消して置き直す形だった。
+    // 実機で「戻るのではなく、その印を動かしたい」と言われた。
+    // ずれているのは位置だけなので、位置だけ直せるほうが手数が少ない。
+    丸たち.forEach((el, i) => {
+      if (!el) return;
+      el.addEventListener('pointerdown', (ev) => つまむ(ev, i));
+      // 指を捕まえてあるので、動きも離しもこの丸に届く
+      el.addEventListener('pointermove', 動かす);
+      el.addEventListener('pointerup', はなす);
+      el.addEventListener('pointercancel', はなす);
     });
+
     やり直し.addEventListener('click', () => {
       points = [];
       refresh();
@@ -99,6 +106,24 @@ export function createMeasureUi(canvasEl, handlers = {}) {
     document.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', position);
     window.addEventListener('orientationchange', position);
+
+    // 【イベント頼みにしない（開発ルール42.5）】
+    // 画面の向きを変えた直後は、resize が届いた時点でまだ
+    // **キャンバスが古い大きさのまま**のことがある。
+    // そのとき position() は古い値を読み、この画面だけ大きさが取り残される。
+    // 実測で、iPadの幅（768px）に変えたあとも枠が1280pxのままだった。
+    // 「終わる」ボタンが画面の外へ出てしまう（右端が846pxで、画面は768px）。
+    //
+    // そこで、イベントを待つのではなく**キャンバスの大きさを直接見張る**。
+    // app.js の watchLayoutChanges と同じ考え方（30章）。
+    if (typeof ResizeObserver === 'function') {
+      大きさの見張り = new ResizeObserver(() => {
+        // ブラウザが位置を決め終わるのを1コマ待ってから測る
+        requestAnimationFrame(position);
+      });
+      大きさの見張り.observe(canvasEl);
+    }
+
     position();
   }
 
@@ -119,11 +144,89 @@ export function createMeasureUi(canvasEl, handlers = {}) {
     handlers.onExit && handlers.onExit();
   }
 
+  // ------------------------------------------------------------
+  // 印をつまんで動かす（開発ルール42章）
+  //
+  // 【いちばん気をつけたこと：2本指の拡大縮小を壊さない】
+  // この画面は板をかぶせない作りで、指は canvas に素通しさせている（39章）。
+  // 丸だけが指を受け取るので、丸の上で2本指を始められると
+  // 拡大縮小が効かなくなる。そこで**2本目の指が来たら、動かすのをやめて譲る。**
+  // 32章・33章で作った拡大縮小を、ここでもう一度作らないための決まりでもある。
+  // ------------------------------------------------------------
+
+  /** 今つまんでいる丸。{ index, pointerId } か null。 */
+  let つまみ中 = null;
+
+  function つまむ(ev, index) {
+    if (つまみ中) return;
+    if (index >= points.length) return;      // まだ置いていない丸
+    if (ev.button !== undefined && ev.button > 0) return; // 右クリックなどは無視
+
+    // ここで止めないと、図面まで一緒に動いてしまう
+    ev.preventDefault();
+    ev.stopPropagation();
+
+    つまみ中 = { index, pointerId: ev.pointerId };
+    const el = 丸たち[index];
+    el.classList.add('ms-dot-tsumami');
+    try {
+      el.setPointerCapture(ev.pointerId);
+    } catch (e) {
+      // 捕まえられなくても、下の見張りで動きは追える
+    }
+    // 2本目の指を見張る。捕まえている指には届かないので window で受ける
+    window.addEventListener('pointerdown', 二本目が来た, true);
+    refresh();
+  }
+
+  function 二本目が来た(ev) {
+    if (!つまみ中 || ev.pointerId === つまみ中.pointerId) return;
+    // 拡大縮小をしようとしている。つまむのをやめて、指を図面に返す
+    はなす();
+  }
+
+  function 動かす(ev) {
+    if (!つまみ中 || ev.pointerId !== つまみ中.pointerId) return;
+    ev.preventDefault();
+    if (!handlers.snapAt) return;
+
+    // 丸の位置はキャンバスの左上が基準（toScreen と同じ物差しにそろえる）
+    const r = canvasEl.getBoundingClientRect();
+    const p = handlers.snapAt(ev.clientX - r.left, ev.clientY - r.top);
+    if (!p) return;
+
+    points[つまみ中.index] = { x: p.x, y: p.y, kind: p.kind };
+    refresh();
+  }
+
+  function はなす() {
+    if (!つまみ中) return;
+    const el = 丸たち[つまみ中.index];
+    if (el) {
+      el.classList.remove('ms-dot-tsumami');
+      try {
+        el.releasePointerCapture(つまみ中.pointerId);
+      } catch (e) {
+        // すでに離れている
+      }
+    }
+    つまみ中 = null;
+    window.removeEventListener('pointerdown', 二本目が来た, true);
+    refresh();
+  }
+
   function destroy() {
     if (!root) return;
+    // 【必ず先に呼ぶ】window に付けた見張りを外さないと、
+    // 画面を閉じたあとも残り続ける（触っていないのに動く不具合のもと）
+    はなす();
     document.removeEventListener('keydown', onKeyDown);
     window.removeEventListener('resize', position);
     window.removeEventListener('orientationchange', position);
+    if (大きさの見張り) {
+      大きさの見張り.disconnect();
+      大きさの見張り = null;
+    }
     root.remove();
     root = null;
     svg = null;
@@ -133,7 +236,6 @@ export function createMeasureUi(canvasEl, handlers = {}) {
     案内 = null;
     結果 = null;
     結果の文字 = null;
-    もどる = null;
     やり直し = null;
   }
 
@@ -200,7 +302,8 @@ export function createMeasureUi(canvasEl, handlers = {}) {
         `<span class="ms-sub">よこ ${formatLength(Math.abs(m.dx), 単位)}` +
         ` ／ たて ${formatLength(Math.abs(m.dy), 単位)}` +
         ` ／ 角度 ${formatAngle(m.angleDeg)}</span>` +
-        `<span class="ms-sub">合わせた先：${points[0].kind || '—'} → ${points[1].kind || '—'}</span>`;
+        `<span class="ms-sub">合わせた先：${points[0].kind || '—'} → ${points[1].kind || '—'}</span>` +
+        '<span class="ms-sub">ずれていたら、赤い印をつまんで動かせます</span>';
       案内.hidden = true;
     } else {
       線.hidden = true;
@@ -220,11 +323,10 @@ export function createMeasureUi(canvasEl, handlers = {}) {
             '<span class="ms-guide-sub">線の端・真ん中・円の中心に吸い付きます</span>'
           : 'もう1つタップしてください<br>' +
             `<span class="ms-guide-sub">1つ目は「${points[0].kind || 'そのまま'}」に合わせました。` +
-            'ちがうところに付いたら「1つ前にもどる」で1点だけ直せます</span>';
+            '赤い印はつまんで動かせます</span>';
     }
 
     // 何も測っていないときは、戻す先も消す先も無い
-    もどる.disabled = points.length === 0;
     やり直し.disabled = points.length === 0;
   }
 
