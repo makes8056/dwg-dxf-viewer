@@ -425,8 +425,36 @@ function composeMatrix(outer, inner) {
   };
 }
 
+/**
+ * この行列は「裏返し（鏡像）」を含んでいるか（開発ルール47章）。
+ *
+ * 行列式（a*d - b*c）がマイナスなら裏返っている。
+ * 裏返ると、**反時計回りが時計回りになる。**
+ * 円弧の始まりと終わりを入れ替えないと、**ふくらむ向きが逆になる。**
+ */
+function isMirrored(m) {
+  return m.a * m.d - m.b * m.c < 0;
+}
+
+/**
+ * 「その向き」が、行列で変換したあと何度になるかを返す（開発ルール47章）。
+ *
+ * 回転の角度をぜんぶ足し算で持ち回ると、鏡像が混ざったときに合わなくなる。
+ * **向きは行列から取り出す。持ち方を1つにすれば、食い違いようがない。**
+ */
+function transformAngle(m, deg) {
+  const rad = (deg * Math.PI) / 180;
+  const x = Math.cos(rad);
+  const y = Math.sin(rad);
+  const 出た角度 = (Math.atan2(m.b * x + m.d * y, m.a * x + m.c * y) * 180) / Math.PI;
+  // 三角関数を通すと 30度 が 29.999999999999993 のようになる。
+  // 図面の精度からすれば無い差だが、そのままだと読みにくく、比べにくい。
+  // 10億分の1度で丸めて、きれいな数に戻す。
+  return normalizeAngle(Math.round(出た角度 * 1e9) / 1e9);
+}
+
 // INSERTの「配置」を表す行列を作る（部品の中の座標 → 置き先の座標）
-function makeInsertMatrix({ baseX, baseY, scaleX, scaleY, rotationDeg, insertX, insertY }) {
+function makeInsertMatrix({ baseX, baseY, scaleX, scaleY, rotationDeg, insertX, insertY, flipX }) {
   const toOrigin = { a: 1, b: 0, c: 0, d: 1, e: -baseX, f: -baseY };
   const scale = { a: scaleX, b: 0, c: 0, d: scaleY, e: 0, f: 0 };
   const rad = (rotationDeg * Math.PI) / 180;
@@ -438,6 +466,10 @@ function makeInsertMatrix({ baseX, baseY, scaleX, scaleY, rotationDeg, insertX, 
   let m = composeMatrix(scale, toOrigin);
   m = composeMatrix(rotate, m);
   m = composeMatrix(toInsert, m);
+
+  // 【押し出しZが-1のとき】部品を置いた結果を、まるごと左右に裏返す（開発ルール47.3）。
+  // 置く点と向きだけを直しても、**中身が裏返らないので鏡像にならない。**
+  if (flipX) m = composeMatrix({ a: -1, b: 0, c: 0, d: 1, e: 0, f: 0 }, m);
   return m;
 }
 
@@ -464,6 +496,14 @@ function mirrorArcAngles(flip, startAngle, endAngle) {
 
 function mirrorRotation(flip, rotationDeg) {
   return flip ? 180 - rotationDeg : rotationDeg;
+}
+
+// 楕円の「どこからどこまで」も、X反転で回る向きが逆になる。
+// 楕円の角度は円弧と数え方が違う（つぶす前の円で測る）ので、
+// 180から引くのではなく **符号を反転して入れ替える**。
+function mirrorEllipseAngles(flip, startAngle, endAngle) {
+  if (!flip) return [startAngle, endAngle];
+  return [-endAngle, -startAngle];
 }
 
 // ============================================================
@@ -611,9 +651,44 @@ function emitArc(drawing, ctx, layer, color, cx, cy, r, startAngle, endAngle) {
     cx: CX,
     cy: CY,
     r: r * ctx.scale,
-    startAngle: normalizeAngle(startAngle + ctx.rotationDeg),
-    endAngle: normalizeAngle(endAngle + ctx.rotationDeg),
+    ...arcAngles(ctx.transform, startAngle, endAngle),
   });
+}
+
+/**
+ * 円弧の始まり・終わりの角度を、置き方（行列）にあわせて直す（開発ルール47章）。
+ *
+ * **裏返しが入っていたら、始まりと終わりを入れ替える。**
+ * 入れ替えないと、右上へふくらむはずの円弧が左上へ…ではなく、
+ * **反対側の残りの部分**として描かれてしまう。
+ * 管工事の図面ではエルボ（曲がり）が円弧なので、これが起きると配管の形が変わる。
+ */
+/**
+ * 鏡像の中の文字の向きを決める（開発ルール47.5）。
+ *
+ * 【なぜ、そのまま裏返さないか】
+ *   線や円弧は裏返してよいが、**文字を裏返すと読めなくなる。**
+ *   CADも、鏡像にした文字を裏返さずに読めるまま出す決まりになっている（MIRRTEXT）。
+ *
+ *   このアプリには「裏返した文字」を描く仕組みが無い。
+ *   向きだけ素直に裏返すと、水平の文字が**上下さかさま**になってしまう。
+ *   さかさまの文字は、現場でいちばん困る。
+ *
+ *   そこで、裏返しの中にある文字だけ、**読める側へ倒す。**
+ *   裏返していない図面の文字には、いっさい手を触れない。
+ */
+function readableTextAngle(m, deg) {
+  const 角度 = transformAngle(m, deg);
+  if (!isMirrored(m)) return 角度; // 裏返していないなら、書かれたとおりに出す
+  return 角度 > 90 && 角度 < 270 ? normalizeAngle(角度 - 180) : 角度;
+}
+
+function arcAngles(m, startAngle, endAngle) {
+  const s = transformAngle(m, startAngle);
+  const e = transformAngle(m, endAngle);
+  return isMirrored(m)
+    ? { startAngle: e, endAngle: s }
+    : { startAngle: s, endAngle: e };
 }
 
 function emitCircle(drawing, ctx, layer, color, cx, cy, r) {
@@ -648,7 +723,8 @@ function emitText(drawing, ctx, layer, color, x, y, height, rotation, text, alig
     x: X,
     y: Y,
     height: height * ctx.scale,
-    rotation: rotation + ctx.rotationDeg,
+    // 文字の向きも行列から取り出す（47章）。ただし読める向きに倒す（下を参照）
+    rotation: readableTextAngle(ctx.transform, rotation),
     text,
     // 文字を書き出す点の、どこに文字を置くか（左端／中央／右端・上／中／下）。
     // 寸法の数字は「中央ぞろえ」で置かれるので、ここを無視すると線からずれる。
@@ -723,14 +799,18 @@ function convertEllipse(rec, drawing, ctx, layerColorMap) {
   const ratio = num(firstValue(g, 40), 1);
   const ry = rx * Math.abs(ratio);
 
-  // 長いほうの軸が何度傾いているか
-  let rotationDeg = (Math.atan2(majorY, majorX) * 180) / Math.PI;
-  if (flip) rotationDeg = 180 - rotationDeg;
+  // 長いほうの軸が何度傾いているか。
+  // majorX はすでに上で反転させてあるので、**ここで重ねて反転させてはいけない。**
+  // （以前は 180 から引く処理が重なっていて、反転が打ち消し合っていた。開発ルール47.4）
+  const rotationDeg = (Math.atan2(majorY, majorX) * 180) / Math.PI;
 
   // 41・42 は「ラジアン」。度に直す。省略時は一周。
   const toDeg = (rad) => (rad * 180) / Math.PI;
-  const startAngle = toDeg(num(firstValue(g, 41), 0));
-  const endAngle = toDeg(num(firstValue(g, 42), Math.PI * 2));
+  const [startAngle, endAngle] = mirrorEllipseAngles(
+    flip,
+    toDeg(num(firstValue(g, 41), 0)),
+    toDeg(num(firstValue(g, 42), Math.PI * 2))
+  );
 
   emitEllipse(drawing, ctx, layer, color, cx, cy, rx, ry, rotationDeg, startAngle, endAngle);
 }
@@ -745,9 +825,13 @@ function emitEllipse(drawing, ctx, layer, color, cx, cy, rx, ry, rotationDeg, st
     cy: CY,
     rx: rx * ctx.scale,
     ry: ry * ctx.scale,
-    rotation: normalizeAngle(rotationDeg + ctx.rotationDeg),
-    startAngle: normalizeAngle(startAngle),
-    endAngle: normalizeAngle(endAngle),
+    rotation: transformAngle(ctx.transform, rotationDeg),
+    // 楕円も、裏返ると回る向きが逆になる。
+    // 軸の傾き（上のrotation）だけ直して角度をそのままにすると、
+    // **弧の残っている側が入れ替わる**（開発ルール47章）。
+    ...(isMirrored(ctx.transform)
+      ? { startAngle: normalizeAngle(-endAngle) + 0, endAngle: normalizeAngle(-startAngle) + 0 }
+      : { startAngle: normalizeAngle(startAngle) + 0, endAngle: normalizeAngle(endAngle) + 0 }),
   });
 }
 
@@ -1566,7 +1650,6 @@ function expandDimension(rec, drawing, ctx, blocks, layerColorMap) {
   const childCtx = {
     // 位置も向きも大きさも変えない。中身がすでに図面の座標で入っているため。
     transform: ctx.transform,
-    rotationDeg: ctx.rotationDeg,
     scale: ctx.scale,
     // 部品の中で「親に従う色」が使われていたら、この寸法の色にする
     inheritedColor: color,
@@ -1609,12 +1692,15 @@ function expandInsert(rec, drawing, ctx, blocks, layerColorMap) {
   const layer = effectiveLayer(g, ctx);
   const insertColor = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
 
-  const insertX = flipXIf(flip, num(firstValue(g, 10)));
+  // 【鏡像（裏返し）の置き方は2通りある。どちらも行列に入れる（開発ルール47章）】
+  //   1. 拡大率がマイナス（41か42が -1）… CADで「鏡像」したときのふつうの書かれ方
+  //   2. 押し出しZが -1                … 裏から見た置き方。まるごと左右に裏返す
+  // どちらも行列1つにまとめておけば、円弧の向きも文字の向きも自動で正しくなる。
+  const insertX = num(firstValue(g, 10));
   const insertY = num(firstValue(g, 20));
   const scaleX = num(firstValue(g, 41), 1);
   const scaleY = num(firstValue(g, 42), 1);
-  let rotationDeg = num(firstValue(g, 50), 0);
-  if (flip) rotationDeg = 180 - rotationDeg;
+  const rotationDeg = num(firstValue(g, 50), 0);
 
   const localMatrix = makeInsertMatrix({
     baseX: block.base.x,
@@ -1624,11 +1710,12 @@ function expandInsert(rec, drawing, ctx, blocks, layerColorMap) {
     rotationDeg,
     insertX,
     insertY,
+    flipX: flip,
   });
 
   const childCtx = {
     transform: composeMatrix(ctx.transform, localMatrix),
-    rotationDeg: ctx.rotationDeg + rotationDeg,
+    // 大きさは、マイナスでも「何倍か」だけを見る（半径や文字の高さがマイナスにならないように）
     scale: ctx.scale * ((Math.abs(scaleX) + Math.abs(scaleY)) / 2),
     inheritedColor: insertColor,
     depth: ctx.depth + 1,
@@ -1820,7 +1907,6 @@ export function parseDxf(text) {
 
   const rootCtx = {
     transform: IDENTITY_MATRIX,
-    rotationDeg: 0,
     scale: 1,
     inheritedColor: aciToCss(0), // トップレベルのBYBLOCKは黒として扱う（drawing.jsの決まりに合わせる）
     depth: 0,
