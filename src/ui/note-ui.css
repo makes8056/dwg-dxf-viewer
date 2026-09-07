@@ -161,6 +161,14 @@
   background: #ffffff;
   border-radius: 16px;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
+  /* 【キーボードが出ても「決定」に手が届くようにする（開発ルール44.5）】
+   * 色・大きさ・向きの段を足したぶん、窓が高くなった。
+   * iPadでキーボードが出ると見える範囲が半分ほどになり、
+   * そのままでは「決定」が画面の外へ出てしまう。
+   * 窓の中でスクロールできるようにしておけば、必ず届く。 */
+  max-height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .nt-dialog-title {
@@ -183,6 +191,80 @@
   font-size: 17px;
   color: #111111;
   background: #ffffff;
+}
+
+/* 改行できるようにしたので、入力欄は textarea（44.3）。
+ * 上下にだけ伸ばせるようにして、横に広げて窓を壊せないようにする。 */
+.nt-input {
+  resize: vertical;
+  min-height: 84px;
+  line-height: 1.5;
+}
+
+.nt-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #666666;
+}
+
+/* 色・大きさ・向きの選び（44.2） */
+.nt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.nt-row-label {
+  flex: 0 0 4em;
+  font-size: 14px;
+  font-weight: 700;
+  color: #333333;
+}
+
+.nt-choices {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 指で押せる大きさを確保する（開発ルール11章：44px以上）。
+ * 見た目が小さくても、押せる範囲は44pxにする。 */
+.nt-chip {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 2px solid #cccccc;
+  border-radius: 10px;
+  background: #ffffff;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  color: #111111;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* 今えらんでいるもの。色の玉は中身が色なので、外側の枠で示す */
+.nt-chip-on {
+  border-color: #111111;
+  box-shadow: 0 0 0 3px rgba(17, 17, 17, 0.15);
+}
+
+.nt-color {
+  width: 44px;
+  padding: 0;
+}
+
+.nt-rot-now {
+  min-width: 3.2em;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: #111111;
 }
 
 .nt-input:focus {

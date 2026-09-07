@@ -37,8 +37,9 @@ import {
   listNotes,
   notesToStore,
   restoreNotes,
-  noteHeightForScale,
-  NOTE_HEIGHT_PX,
+  findNoteAt,
+  noteHeightFor,
+  colorCssFor,
 } from '../notes.js';
 import { findSnapPoint, SNAP_RADIUS_PX } from '../measure.js';
 import { startUpdateCheck } from '../update-check.js';
@@ -761,12 +762,23 @@ const noteUi = createNoteUi(canvas, {
   },
   getNotes: () => listNotes(currentDrawing),
 
-  onCreate: (x, y, text) => {
+  // 取っ手の色を、その注記の色に合わせる（どれがどれか見て分かるように）
+  colorOf: (note) => colorCssFor(note.colorKey),
+
+  onCreate: (x, y, 選び) => {
     const vp = ensureViewport();
     if (!vp || !currentDrawing) return;
     // 【置いたときに見えている大きさで作る（43.2）】
     // 図面の単位で決め打ちすると、図面の縮尺しだいで極端な大きさになる。
-    const note = createNote({ x, y, text, height: noteHeightForScale(vp.scale) });
+    const note = createNote({
+      x,
+      y,
+      text: 選び.text,
+      colorKey: 選び.colorKey,
+      sizeKey: 選び.sizeKey,
+      rotation: 選び.rotation,
+      height: noteHeightFor(選び.sizeKey, vp.scale),
+    });
     if (!note) return;
     addNote(currentDrawing, note);
     noteChanged();
@@ -780,10 +792,23 @@ const noteUi = createNoteUi(canvas, {
     noteChanged();
   },
 
-  onEdit: (noteId, text) => {
+  onEdit: (noteId, 選び) => {
+    const vp = ensureViewport();
     if (!currentDrawing) return;
+    const 変更 = {
+      text: 選び.text,
+      colorKey: 選び.colorKey,
+      rotation: 選び.rotation,
+    };
+    // 【大きさは、触ったときだけ計算し直す（開発ルール44.2）】
+    // 触っていないのに計算し直すと、**文字を直しただけで大きさが変わる。**
+    // 置いたときと今とで、拡大率が違うためである。
+    if (選び.sizeChanged && vp) {
+      変更.sizeKey = 選び.sizeKey;
+      変更.height = noteHeightFor(選び.sizeKey, vp.scale);
+    }
     // 空にして決定したときは消える（notes.js の決まり）
-    if (editNote(currentDrawing, noteId, text) === '見つからない') return;
+    if (editNote(currentDrawing, noteId, 変更) === '見つからない') return;
     noteChanged();
   },
 
@@ -792,7 +817,6 @@ const noteUi = createNoteUi(canvas, {
     if (!deleteNote(currentDrawing, noteId)) return;
     noteChanged();
   },
-
   onExit: () => { /* モードから抜けただけ。何もしない */ },
 });
 
@@ -847,7 +871,11 @@ function onNoteTap(screenX, screenY) {
   const vp = ensureViewport();
   if (!vp || !viewportMod) return;
   const [x, y] = viewportMod.toDrawing(vp, screenX, screenY);
-  noteUi.tapAt(x, y);
+  // 【すでに文字があるところなら、重ねずに書き直しにする（開発ルール44.4）】
+  // 重ねると、どちらも読めなくなる。
+  const 余裕 = SNAP_RADIUS_PX / (vp.scale || 1);
+  const あった = findNoteAt(currentDrawing, x, y, 余裕);
+  noteUi.tapAt(x, y, あった);
 }
 
 /**

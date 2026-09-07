@@ -1,4 +1,4 @@
-// note-ui.js — 「文字を書く」画面（開発ルール43章）
+// note-ui.js — 「文字を書く」画面（開発ルール43章・44章）
 //
 // 【この係の役目】
 //   注記を置く・つまんで動かす・書き直す・消すための画面を出す。
@@ -6,27 +6,40 @@
 //
 // 【測る画面（measure-ui.js）と同じ作りにしている】
 //   板をかぶせない。指は canvas に素通しさせ、拡大縮小・移動は今までどおり効かせる。
-//   受け取るのは**ボタンと、注記のつまみだけ**。
-//   つまみの上で2本指を始められたら、つまむのをやめて拡大縮小に譲る（42.3）。
+//   受け取るのは**ボタンと、注記の取っ手だけ**。
+//   取っ手の上で2本指を始められたら、つまむのをやめて拡大縮小に譲る（42.3）。
 //
 // 【文字そのものは、この画面では描かない】
 //   注記は drawing.entities に text として入っているので、
 //   render.js がふつうの文字として描く。画面も紙もPDFも同じ道を通る（43.1）。
 //   ここが出すのは「つまむための小さな取っ手」だけである。
 
-import { MAX_NOTE_LENGTH, normalizeNoteText } from '../notes.js';
+import {
+  NOTE_COLORS,
+  NOTE_SIZES,
+  ROTATION_STEP,
+  MAX_NOTE_LINES,
+  MAX_LINE_LENGTH,
+  DEFAULT_COLOR_KEY,
+  DEFAULT_SIZE_KEY,
+  normalizeNoteText,
+  normalizeRotation,
+} from '../notes.js';
 
 /**
  * 「文字を書く」画面を用意する。
  *
  * @param {HTMLElement} canvasEl 図面を描いているキャンバス
  * @param {object} handlers
- *   toScreen(x, y)        … 図面の座標 → キャンバス基準の画面座標
- *   getNotes()            … 今の注記の一覧（図形の形）
- *   onMove(noteId, sx, sy)… つまみを動かした（キャンバス基準の画面座標）
- *   onEdit(noteId, text)  … 書き直した（空文字なら消す）
- *   onDelete(noteId)      … 消した
- *   onExit()              … 「終わる」で抜けた
+ *   toScreen(x, y)  … 図面の座標 → キャンバス基準の画面座標
+ *   getNotes()      … 今の注記の一覧
+ *   onCreate(x, y, 中身)      … 新しく置いた
+ *   onMove(noteId, sx, sy)   … つまみを動かした（キャンバス基準の画面座標）
+ *   onEdit(noteId, 中身)      … 書き直した（中身.text が空なら消す）
+ *   onDelete(noteId)         … 消した
+ *   onExit()                 … 「終わる」で抜けた
+ *
+ *   中身 = { text, colorKey, sizeKey, rotation, sizeChanged }
  */
 export function createNoteUi(canvasEl, handlers = {}) {
   let active = false;
@@ -38,13 +51,31 @@ export function createNoteUi(canvasEl, handlers = {}) {
   let 終わる = null;
   let 大きさの見張り = null;
 
-  // 文字を入れる小さな窓
+  // 文字を入れる窓
   let 窓 = null;
   let 入力欄 = null;
   let 窓の見出し = null;
   let 消すボタン = null;
+  let 向きの表示 = null;
   /** 今その窓で編集している相手。{ mode:'新規', x, y } か { mode:'書き直し', noteId } */
   let 編集中 = null;
+  /** 窓で選んでいる中身 */
+  let 選んだ色 = DEFAULT_COLOR_KEY;
+  let 選んだ大きさ = DEFAULT_SIZE_KEY;
+  let 選んだ向き = 0;
+  /** 大きさを触ったか。触っていなければ、書き直しても大きさを変えない（44.2） */
+  let 大きさを触った = false;
+
+  function 色の選び(c) {
+    return (
+      `<button type="button" class="nt-chip nt-color" data-color="${c.key}" ` +
+      `style="background:${c.css}" aria-label="${c.key}"></button>`
+    );
+  }
+
+  function 大きさの選び(z) {
+    return `<button type="button" class="nt-chip nt-size" data-size="${z.key}">${z.key}</button>`;
+  }
 
   function build() {
     root = document.createElement('div');
@@ -58,8 +89,30 @@ export function createNoteUi(canvasEl, handlers = {}) {
       <div class="nt-dialog" hidden>
         <div class="nt-dialog-box" role="dialog" aria-modal="true" aria-label="文字を書く">
           <p class="nt-dialog-title">文字を書く</p>
-          <input class="nt-input" type="text" maxlength="${MAX_NOTE_LENGTH}"
-                 inputmode="text" autocomplete="off" placeholder="例：ここ既設と接続">
+          <textarea class="nt-input" rows="3" autocomplete="off"
+                    placeholder="例：ここ既設と接続&#10;（改行できます）"></textarea>
+          <p class="nt-hint">改行は${MAX_NOTE_LINES}行まで。1行${MAX_LINE_LENGTH}文字まで</p>
+
+          <div class="nt-row">
+            <span class="nt-row-label">色</span>
+            <div class="nt-choices">${NOTE_COLORS.map(色の選び).join('')}</div>
+          </div>
+
+          <div class="nt-row">
+            <span class="nt-row-label">大きさ</span>
+            <div class="nt-choices">${NOTE_SIZES.map(大きさの選び).join('')}</div>
+          </div>
+
+          <div class="nt-row">
+            <span class="nt-row-label">向き</span>
+            <div class="nt-choices">
+              <button type="button" class="nt-chip nt-rot-left" aria-label="左にまわす">◀</button>
+              <span class="nt-rot-now">0°</span>
+              <button type="button" class="nt-chip nt-rot-right" aria-label="右にまわす">▶</button>
+              <button type="button" class="nt-chip nt-rot-reset">まっすぐ</button>
+            </div>
+          </div>
+
           <div class="nt-dialog-buttons">
             <button type="button" class="nt-btn nt-cancel">やめる</button>
             <button type="button" class="nt-btn nt-delete" hidden>消す</button>
@@ -76,26 +129,43 @@ export function createNoteUi(canvasEl, handlers = {}) {
     入力欄 = root.querySelector('.nt-input');
     窓の見出し = root.querySelector('.nt-dialog-title');
     消すボタン = root.querySelector('.nt-delete');
+    向きの表示 = root.querySelector('.nt-rot-now');
 
     終わる.addEventListener('click', () => stop());
     root.querySelector('.nt-ok').addEventListener('click', 決定);
     root.querySelector('.nt-cancel').addEventListener('click', 窓を閉じる);
     消すボタン.addEventListener('click', 消す);
 
-    // 【Enterで決定できるようにする】iPadのキーボードの「改行」で確定したい
-    //
-    // 【ただし、日本語の変換中は横取りしない（開発ルール43.6）】
-    // 「せつぞく」と打って変換している最中のEnterは、**変換を確定するためのEnter**である。
-    // ここで横取りすると、変換が終わる前に窓が閉じ、
-    // ひらがなのまま書き込まれる。日本語で使うアプリでは必ず踏む。
-    //   isComposing … 変換中かどうか（今どきのブラウザ）
-    //   keyCode 229 … 同じことを表す古い言い方。iPadの古い版のために残す
-    入力欄.addEventListener('keydown', (ev) => {
-      if (ev.key !== 'Enter') return;
-      if (ev.isComposing || ev.keyCode === 229) return;
-      ev.preventDefault();
-      決定();
+    for (const b of root.querySelectorAll('.nt-color')) {
+      b.addEventListener('click', () => {
+        選んだ色 = b.dataset.color;
+        選び直しを見せる();
+      });
+    }
+    for (const b of root.querySelectorAll('.nt-size')) {
+      b.addEventListener('click', () => {
+        選んだ大きさ = b.dataset.size;
+        大きさを触った = true;
+        選び直しを見せる();
+      });
+    }
+    root.querySelector('.nt-rot-left').addEventListener('click', () => {
+      選んだ向き = normalizeRotation(選んだ向き + ROTATION_STEP);
+      選び直しを見せる();
     });
+    root.querySelector('.nt-rot-right').addEventListener('click', () => {
+      選んだ向き = normalizeRotation(選んだ向き - ROTATION_STEP);
+      選び直しを見せる();
+    });
+    root.querySelector('.nt-rot-reset').addEventListener('click', () => {
+      選んだ向き = 0;
+      選び直しを見せる();
+    });
+
+    // 【改行できるようにしたので、Enterで決定しない（開発ルール44.3）】
+    // 以前は Enter で決定していた。改行を入れられるようにした以上、
+    // Enter は改行のためのものである。両方に使うと、どちらも思いどおりにならない。
+    // 決定は「決定」ボタンだけで行う。
 
     document.addEventListener('keydown', onKeyDown);
     window.addEventListener('resize', position);
@@ -140,6 +210,7 @@ export function createNoteUi(canvasEl, handlers = {}) {
     入力欄 = null;
     窓の見出し = null;
     消すボタン = null;
+    向きの表示 = null;
     編集中 = null;
   }
 
@@ -218,12 +289,35 @@ export function createNoteUi(canvasEl, handlers = {}) {
   // 文字を入れる窓
   // ------------------------------------------------------------
 
+  /** 今どれを選んでいるかを、見て分かるようにする。 */
+  function 選び直しを見せる() {
+    if (!root) return;
+    for (const b of root.querySelectorAll('.nt-color')) {
+      b.classList.toggle('nt-chip-on', b.dataset.color === 選んだ色);
+    }
+    for (const b of root.querySelectorAll('.nt-size')) {
+      b.classList.toggle('nt-chip-on', b.dataset.size === 選んだ大きさ);
+    }
+    向きの表示.textContent = `${選んだ向き}°`;
+  }
+
   function 窓を開く(中身) {
     編集中 = 中身;
     const 書き直し = 中身.mode === '書き直し';
     窓の見出し.textContent = 書き直し ? '文字を書き直す' : '文字を書く';
     入力欄.value = 書き直し ? String(中身.text || '') : '';
     消すボタン.hidden = !書き直し;
+
+    // 書き直しのときは今の設定を出す。新しく置くときは、前に選んだものを引き継ぐ
+    // （同じ色・同じ大きさで続けて書くことが多いため）
+    if (書き直し) {
+      選んだ色 = 中身.colorKey || DEFAULT_COLOR_KEY;
+      選んだ大きさ = 中身.sizeKey || DEFAULT_SIZE_KEY;
+      選んだ向き = normalizeRotation(中身.rotation);
+    }
+    大きさを触った = false;
+    選び直しを見せる();
+
     窓.hidden = false;
     // iPadでキーボードを出すため、少し待ってから焦点を当てる
     setTimeout(() => {
@@ -246,15 +340,22 @@ export function createNoteUi(canvasEl, handlers = {}) {
     if (!編集中) return;
     const 文字 = normalizeNoteText(入力欄.value);
     const いま = 編集中;
+    const 選び = {
+      text: 文字,
+      colorKey: 選んだ色,
+      sizeKey: 選んだ大きさ,
+      rotation: 選んだ向き,
+      sizeChanged: 大きさを触った,
+    };
     窓を閉じる();
 
     if (いま.mode === '書き直し') {
-      handlers.onEdit && handlers.onEdit(いま.noteId, 文字);
+      handlers.onEdit && handlers.onEdit(いま.noteId, 選び);
       return;
     }
     // 新しく置く。空のまま決定を押したときは、何も置かない
     if (!文字) return;
-    handlers.onCreate && handlers.onCreate(いま.x, いま.y, 文字);
+    handlers.onCreate && handlers.onCreate(いま.x, いま.y, 選び);
   }
 
   function 消す() {
@@ -262,6 +363,19 @@ export function createNoteUi(canvasEl, handlers = {}) {
     const id = 編集中.noteId;
     窓を閉じる();
     handlers.onDelete && handlers.onDelete(id);
+  }
+
+  /** 書き直しの窓を出す（取っ手を押したときと、文字の上をタップしたとき）。 */
+  function 書き直しを開く(note) {
+    if (!note) return;
+    窓を開く({
+      mode: '書き直し',
+      noteId: note.id,
+      text: note.text,
+      colorKey: note.colorKey,
+      sizeKey: note.sizeKey,
+      rotation: note.rotation,
+    });
   }
 
   // ------------------------------------------------------------
@@ -276,27 +390,27 @@ export function createNoteUi(canvasEl, handlers = {}) {
     const 残す = new Set();
 
     for (const n of notes) {
-      残す.add(n.noteId);
-      let el = 取っ手たち.get(n.noteId);
+      残す.add(n.id);
+      let el = 取っ手たち.get(n.id);
       if (!el) {
         el = document.createElement('span');
         el.className = 'nt-handle';
-        el.dataset.noteId = n.noteId;
-        el.addEventListener('pointerdown', (ev) => つまむ(ev, n.noteId));
+        el.dataset.noteId = n.id;
+        el.addEventListener('pointerdown', (ev) => つまむ(ev, n.id));
         el.addEventListener('pointermove', 動かす);
         el.addEventListener('pointerup', はなす);
         el.addEventListener('pointercancel', はなす);
         // 押しただけ（動かさなかった）なら、書き直しの窓を出す
         el.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          const いま = (handlers.getNotes ? handlers.getNotes() : []).find(
-            (x) => x.noteId === n.noteId
-          );
-          if (いま) 窓を開く({ mode: '書き直し', noteId: n.noteId, text: いま.text });
+          const いま = (handlers.getNotes ? handlers.getNotes() : []).find((x) => x.id === n.id);
+          書き直しを開く(いま);
         });
         取っ手の入れ物.appendChild(el);
-        取っ手たち.set(n.noteId, el);
+        取っ手たち.set(n.id, el);
       }
+      // 取っ手の色を、その注記の色に合わせる（どれがどれか、見て分かるように）
+      el.style.borderColor = handlers.colorOf ? handlers.colorOf(n) : '#c81e1e';
       const [sx, sy] = handlers.toScreen ? handlers.toScreen(n.x, n.y) : [0, 0];
       el.style.left = `${sx}px`;
       el.style.top = `${sy}px`;
@@ -312,10 +426,10 @@ export function createNoteUi(canvasEl, handlers = {}) {
     案内.innerHTML =
       notes.length === 0
         ? '文字を書きたいところをタップしてください<br>' +
-          '<span class="nt-guide-sub">書いた文字は、印刷とPDFにも出ます</span>'
+          '<span class="nt-guide-sub">色・大きさ・向きを選べます。書いた文字は印刷とPDFにも出ます</span>'
         : '文字を書きたいところをタップしてください<br>' +
           `<span class="nt-guide-sub">今 ${notes.length} 個。` +
-          '赤い取っ手をつまむと動かせます。押すと書き直し・削除ができます</span>';
+          '取っ手をつまむと動かせます。押すと書き直し・削除ができます</span>';
   }
 
   return {
@@ -327,16 +441,15 @@ export function createNoteUi(canvasEl, handlers = {}) {
     },
     stop,
     isActive: () => active,
-    /** 図面の上をタップされた（キャンバス基準の画面座標ではなく、図面の座標）。 */
-    tapAt(x, y) {
+    /**
+     * 図面の上をタップされた（図面の座標）。
+     * すでに文字があるところなら、重ねずに書き直しにする（44.4）。
+     */
+    tapAt(x, y, あった注記) {
       if (!active) return;
       if (窓 && !窓.hidden) return; // 窓が開いている間は置かない
-      窓を開く({ mode: '新規', x, y });
-    },
-    /** 押されただけの注記を、書き直しの窓に出す。 */
-    editNote(noteId, text) {
-      if (!active) return;
-      窓を開く({ mode: '書き直し', noteId, text });
+      if (あった注記) 書き直しを開く(あった注記);
+      else 窓を開く({ mode: '新規', x, y });
     },
     /** 窓が開いているか（図面のタップを受けてよいかの判断に使う）。 */
     isDialogOpen: () => Boolean(窓 && !窓.hidden),
