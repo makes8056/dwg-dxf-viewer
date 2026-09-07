@@ -888,3 +888,183 @@ test('形にならない自由曲線は、黙って捨てずに数える', () =>
   assert.equal(d.unsupported.count, 1, '描けなかった曲線を黙って捨てている');
   assert.equal(d.unsupported.kinds['SPLINE（形が読み取れない）'], 1);
 });
+
+// ============================================================
+// 属性の文字（ATTDEF・ATTRIB）46章
+//
+// 実物の図面で ATTRIB 66個が消え、ATTDEF 66個が無用に数えられていた。
+// ============================================================
+
+/** 見本の中から、その文字を探す。 */
+const 文字を探す = (d, text) => only(d, 'text').find((t) => t.text === text);
+
+test('部品に入っている実際の文字（ATTRIB）が、図面に出る', () => {
+  // ここが効かないと、機器番号や呼び径が図面からまるごと消える
+  const d = load('attrib.dxf');
+  const t = 文字を探す(d, 'V-1');
+  assert.ok(t, '属性の文字が出ていない（機器番号が消えている）');
+  near(t.x, 100, '文字のX');
+  near(t.y, 205, '文字のY');
+  assert.equal(t.height, 3);
+  // ぞろえの指定が無い属性は、左ぞろえ・文字の下端の線が基準になる。
+  // ここを押さえておかないと、「いつも中央ぞろえ」のような取り違えを見逃す
+  assert.equal(t.hAlign, 'left', 'ぞろえの指定が無いのに、左ぞろえになっていない');
+  assert.equal(t.vAlign, 'alphabetic', 'ぞろえの指定が無いのに、下端の線が基準になっていない');
+});
+
+test('位置ぞろえのある属性は、2つめの点に置かれる', () => {
+  // 【DXFの決まり】ぞろえの指定があるときは (10,20) ではなく (11,21) が置き場所。
+  // 取り違えると、丸の中の番号が丸から外れて出る。
+  const d = load('attrib.dxf');
+  const t = 文字を探す(d, '50A');
+  assert.ok(t, '中央ぞろえの属性が出ていない');
+  near(t.x, 150, '2つめの点のXが使われていない');
+  near(t.y, 250, '2つめの点のYが使われていない');
+  assert.equal(t.hAlign, 'center', '中央ぞろえになっていない');
+  assert.equal(t.vAlign, 'middle', 'タテのぞろえが読めていない');
+});
+
+test('部品の中の「型」（ATTDEF）は描かないし、数えもしない', () => {
+  // 型は「ここに文字が入ります」という枠であって、図面から欠けてはいない。
+  // 数えると無用な心配をかけ、本当に足りない図形が埋もれる（18.1）
+  const d = load('attrib.dxf');
+  assert.equal(d.unsupported.count, 0, `型を数えている: ${JSON.stringify(d.unsupported.kinds)}`);
+  assert.equal(文字を探す(d, 'BANGO'), undefined, '型の名札を、そのまま図面に出している');
+});
+
+test('「一定」の型は、ATTRIBが無いので型の値をそのまま出す', () => {
+  // 一定の属性にはATTRIBが作られない。型を飛ばすと、この文字だけ消える
+  const d = load('attrib.dxf');
+  const t = 文字を探す(d, 'VP');
+  assert.ok(t, '一定の型の文字が出ていない');
+  // 部品を (100,200) に置いたので、部品の中の (0,10) は (100,210) になる
+  near(t.x, 100, '部品を置いた位置が効いていない');
+  near(t.y, 210, '部品を置いた位置が効いていない');
+});
+
+test('図面に直接置かれた型は、CADと同じく名札を出す', () => {
+  const d = load('attrib.dxf');
+  const t = 文字を探す(d, 'NAFUDA');
+  assert.ok(t, '直接置かれた型が消えている');
+  near(t.x, 300, '名札のX');
+});
+
+test('「見えない」指定の属性と型は、出さないし数えない', () => {
+  // もともとCADの画面に出ないもの。数えると無用な心配をかける（18.2）
+  const d = load('attrib.dxf');
+  assert.equal(文字を探す(d, 'かくれ'), undefined, '見えない属性を描いている');
+  assert.equal(文字を探す(d, 'ひみつ'), undefined, '見えない型を描いている');
+  assert.equal(d.unsupported.count, 0, 'もともと出ないものを数えている');
+});
+
+test('属性の文字が、図面の範囲（bounds）に入る', () => {
+  const d = load('attrib.dxf');
+  assert.ok(d.bounds.maxX >= 300 && d.bounds.maxY >= 300,
+    `属性の文字が範囲に入っていない: ${JSON.stringify(d.bounds)}`);
+});
+
+// ============================================================
+// 引出線（MULTILEADER）46章
+// ============================================================
+
+test('引出線が、折れ線と文字に直して出る。新しい種類を増やさない', () => {
+  const d = load('mleader.dxf');
+  assert.equal(d.unsupported.count, 0, `引出線が数えられている: ${JSON.stringify(d.unsupported.kinds)}`);
+  for (const e of d.entities) {
+    assert.ok(['polyline', 'line', 'text'].includes(e.type),
+      `折れ線・線・文字のほかに種類が増えている: ${e.type}`);
+  }
+});
+
+test('引出線の折れ線が、書かれたとおりの点を通る', () => {
+  // ここがずれると、矢印が指している先が変わってしまう
+  const d = load('mleader.dxf');
+  const 線 = only(d, 'polyline');
+  assert.equal(線.length, 1, '引出線の折れ線が出ていない');
+  assert.deepEqual(線[0].points, [[0, 0], [50, 25], [90, 50]]);
+  assert.equal(線[0].closed, false, '引出線を閉じてしまっている');
+});
+
+test('折れ曲がってから文字へ伸びる線（dogleg）が出る', () => {
+  // これが無いと、引出線と文字が離れて、どれの注記か分からなくなる
+  const d = load('mleader.dxf');
+  const 線 = only(d, 'line');
+  assert.equal(線.length, 1, '折れ曲がりの線が出ていない');
+  // 終わりの点(90,50)から、向き(1,0)へ長さ10ぶん
+  assert.deepEqual([線[0].x1, 線[0].y1, 線[0].x2, 線[0].y2], [90, 50, 100, 50]);
+});
+
+test('引出線の文字が、場所と大きさどおりに出る', () => {
+  const d = load('mleader.dxf');
+  const t = only(d, 'text')[0];
+  assert.ok(t, '引出線の文字が出ていない');
+  assert.equal(t.text, 'VP50');
+  near(t.x, 100, '文字のX');
+  near(t.y, 50, '文字のY');
+  assert.equal(t.height, 5, '文字の高さが読めていない');
+  near(t.rotation, 0, '文字の向き');
+});
+
+test('コード304の取り違えで、区切りの記号が文字として出ない', () => {
+  // 【落とし穴】304は「文字の中身」と「LEADER_LINE{」の両方に使われる。
+  // 番号だけで見分けると、区切りの記号が図面に文字として出てしまう。
+  const d = load('mleader.dxf');
+  for (const t of only(d, 'text')) {
+    assert.ok(!t.text.includes('{') && !t.text.includes('}'),
+      `区切りの記号が文字として出ている: ${JSON.stringify(t.text)}`);
+    assert.ok(!t.text.includes('LEADER'),
+      `区切りの名前が文字として出ている: ${JSON.stringify(t.text)}`);
+  }
+  assert.equal(only(d, 'text')[0].text, 'VP50');
+});
+
+test('閉じかっこが足りない引出線でも、読めたぶんは描く', () => {
+  // 壊れたファイルで作りかけを捨てると、線が丸ごと消える
+  const dxf = [
+    '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'MULTILEADER', '8', '0', '62', '7',
+    '300', 'CONTEXT_DATA{',
+    '41', '4.0', '304', 'ABC', '12', '10.0', '22', '20.0',
+    '302', 'LEADER{',
+    '304', 'LEADER_LINE{',
+    '10', '0.0', '20', '0.0', '10', '5.0', '20', '5.0',
+    // ここで閉じかっこが無いまま終わる
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  assert.equal(d.unsupported.count, 0, '読めたのに数えている');
+  assert.equal(only(d, 'polyline').length, 1, '作りかけの折れ線を捨てている');
+  assert.equal(only(d, 'text')[0].text, 'ABC');
+});
+
+test('中身の無い引出線は、黙って捨てずに数える', () => {
+  // 線も文字も無ければ描くものが無い。黙って消さずに報告する（10.5）
+  const dxf = [
+    '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'MULTILEADER', '8', '0', '62', '7',
+    '300', 'CONTEXT_DATA{', '301', '}',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  assert.equal(d.entities.length, 0);
+  assert.equal(d.unsupported.count, 1, '描けなかった引出線を黙って捨てている');
+  assert.equal(d.unsupported.kinds['MULTILEADER（中身が読み取れない）'], 1);
+});
+
+test('MLEADER という名前でも、同じように読める', () => {
+  // 書き出すソフトによって名前が変わる
+  const dxf = [
+    '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'MLEADER', '8', '0', '62', '7',
+    '300', 'CONTEXT_DATA{',
+    '41', '4.0', '304', 'XYZ', '12', '10.0', '22', '20.0',
+    '301', '}',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  assert.equal(d.unsupported.count, 0, 'MLEADER という名前を読めていない');
+  assert.equal(only(d, 'text')[0].text, 'XYZ');
+});

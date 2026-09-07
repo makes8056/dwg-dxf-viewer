@@ -790,6 +790,119 @@ function convertText(rec, drawing, ctx, layerColorMap) {
 }
 
 /**
+ * TEXT・ATTRIB の「書き出す点の、どこに文字を置くか」を読む（コード72・74）。
+ *
+ *   72（ヨコ）… 0:左 1:中央 2:右 3:両端そろえ 4:まん中 5:幅を合わせる
+ *   74（タテ）… 0:文字の下端の線 1:下 2:中 3:上
+ *
+ * 属性の文字（ATTRIB）は、丸の中の番号のように **中央ぞろえ**で置かれることが多い。
+ * ここを読まないと、番号が丸から外れて出る。
+ */
+function textAlign(groups) {
+  const ヨコ = num(firstValue(groups, 72), 0);
+  const タテ = num(firstValue(groups, 74), 0);
+  const h = ヨコ === 1 || ヨコ === 4 ? 'center' : ヨコ === 2 ? 'right' : 'left';
+  // 72が4（まん中）のときは、タテもまん中になる決まり
+  const v =
+    ヨコ === 4 ? 'middle'
+      : タテ === 1 ? 'bottom'
+        : タテ === 2 ? 'middle'
+          : タテ === 3 ? 'top'
+            : 'alphabetic';
+  return { h, v };
+}
+
+/**
+ * 文字を置く点を決める。
+ *
+ * 【DXFの決まり】位置ぞろえ（72・74）が指定されているときは、
+ * 1つめの点(10,20)ではなく **2つめの点(11,21)** が実際の置き場所になる。
+ * ここを取り違えると、文字が本来と違う場所に出る。
+ */
+function textPoint(groups, flip) {
+  const ヨコ = num(firstValue(groups, 72), 0);
+  const タテ = num(firstValue(groups, 74), 0);
+  const 別の点がある = firstValue(groups, 11) !== undefined;
+  const 別の点を使う = (ヨコ !== 0 || タテ !== 0) && 別の点がある;
+  const xCode = 別の点を使う ? 11 : 10;
+  const yCode = 別の点を使う ? 21 : 20;
+  return {
+    x: flipXIf(flip, num(firstValue(groups, xCode))),
+    y: num(firstValue(groups, yCode)),
+  };
+}
+
+/**
+ * ATTRIB（属性の文字）を図面に足す（開発ルール46章）。
+ *
+ * 【属性とは】
+ *   部品（ブロック）に持たせる「差し替えできる文字」のこと。
+ *   同じ「バルブ」の部品を置いても、1つ1つに違う機器番号を入れられる。
+ *   その**実際に入っている文字**がATTRIBで、CADの画面にも紙にも出る。
+ *
+ *   これを飛ばすと、機器番号や呼び径が図面から**まるごと消える。**
+ *   お客様の図面で66個消えていた。
+ */
+function convertAttrib(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  // コード70の1のくらい ＝「見えない属性」。CADでも出ないので、描かないし数えない（18.2）
+  const flags = num(firstValue(g, 70), 0);
+  if ((flags & 1) === 1) return true;
+
+  const flip = isExtrusionFlippedX(g);
+  const layer = effectiveLayer(g, ctx);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const 点 = textPoint(g, flip);
+  const height = num(firstValue(g, 40), 2.5);
+  const rotation = mirrorRotation(flip, num(firstValue(g, 50)));
+  const text = expandControlCodes(firstValue(g, 1));
+
+  // 中身が空の属性は、CADでも何も見えない。emitText が作らずに済ませる
+  emitText(drawing, ctx, layer, color, 点.x, 点.y, height, rotation, text, textAlign(g));
+  return true;
+}
+
+/**
+ * ATTDEF（属性の「枠」の定義）を扱う（開発ルール46章）。
+ *
+ * 【ここは数えてはいけない】
+ *   ATTDEFは、部品の中にある「ここに機器番号が入ります」という**型**である。
+ *   部品を置いたときに画面へ出るのは、型ではなく上のATTRIB（実際の値）のほう。
+ *   **つまり、型そのものは図面から欠けていない。**
+ *   これを「表示できませんでした」と数えると、無用な心配をかけ、
+ *   本当に足りない図形が埋もれる（開発ルール18.1）。お客様の図面で66個出ていた。
+ *
+ * ただし、次の2つだけは本当に画面に出るので描く。
+ *   - 「一定」の印が付いた型（コード70の2のくらい）
+ *     … 値が決め打ちで、ATTRIBが作られない。だから型が持つ値がそのまま出る
+ *   - 部品の中ではなく、図面に直接置かれた型
+ *     … CADは名札（タグ）を表示する
+ */
+function convertAttdef(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flags = num(firstValue(g, 70), 0);
+  if ((flags & 1) === 1) return true; // 見えない指定
+
+  const 一定 = (flags & 2) === 2;
+  const 部品の中 = ctx.depth > 0;
+
+  // 部品の中のふつうの型は、ATTRIBが本当の値を持っている。描かないし数えない
+  if (部品の中 && !一定) return true;
+
+  const flip = isExtrusionFlippedX(g);
+  const layer = effectiveLayer(g, ctx);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const 点 = textPoint(g, flip);
+  const height = num(firstValue(g, 40), 2.5);
+  const rotation = mirrorRotation(flip, num(firstValue(g, 50)));
+  // 一定の型は決まった値(1)、図面に直接置かれた型はCADと同じく名札(2)を出す
+  const text = expandControlCodes(firstValue(g, 一定 ? 1 : 2));
+
+  emitText(drawing, ctx, layer, color, 点.x, 点.y, height, rotation, text, textAlign(g));
+  return true;
+}
+
+/**
  * MTEXT（長い文字）の傾きを求める。
  *
  * 【実物の図面で見つかった不具合】
@@ -1028,6 +1141,166 @@ function convertSpline(rec, drawing, ctx, layerColorMap) {
 
   emitPolyline(drawing, ctx, layer, color, result.points, result.closed);
   return true;
+}
+
+/**
+ * MULTILEADER（引出線）の中身を読み解く（開発ルール46章）。
+ *
+ * 【引出線とは】
+ *   矢印から線を引いて、その先に文字を書くもの。「この配管はVP50」のような注記に使う。
+ *
+ * 【この形式は入れ子になっている】
+ *   中身は かっこ で囲まれた入れ子になっている。
+ *
+ *     CONTEXT_DATA{        … 文字と、その置き場所
+ *       LEADER{            … 引出線1本ぶん
+ *         LEADER_LINE{ }   … 折れ線の頂点
+ *       }
+ *     }
+ *
+ * 【落とし穴：コード304は2つの意味を持つ】
+ *   304は「文字の中身」でもあり、「LEADER_LINE{」という区切りでもある。
+ *   **番号だけで見分けてはいけない。値の文字を見る。**
+ *   ここを間違えると、区切りの記号が文字として図面に出る。
+ *
+ *   そこで、300〜305 のうち
+ *     値が「{」で終わる → 入れ子の始まり
+ *     値が「}」        → 入れ子の終わり
+ *     それ以外         → 中身（304なら文字）
+ *   として扱う。閉じかっこの番号を当てにしないので、書き方の差にも強い。
+ *
+ * @returns {{text:string, textX:number, textY:number, height:number,
+ *            rotation:number|null, lines:Array, doglegs:Array}}
+ */
+function parseMLeaderGroups(g) {
+  const out = { text: '', textX: 0, textY: 0, height: 0, rotation: null, lines: [], doglegs: [] };
+  const 入れ子 = [];
+  const いまどこ = () => (入れ子.length ? 入れ子[入れ子.length - 1] : '');
+
+  let 線 = null; // 作りかけの引出線（点の並び）
+  let 点 = null; // 作りかけの点
+  let 引出 = null; // 作りかけの LEADER（終わりの点と、折れ曲がりの向き）
+
+  const 線をしまう = () => {
+    if (線 && 線.length >= 2) out.lines.push(線);
+    線 = null;
+    点 = null;
+  };
+  const 引出をしまう = () => {
+    if (引出 && 引出.終点 && 引出.向き && 引出.長さ > 0) {
+      const [ex, ey] = 引出.終点;
+      const [dx, dy] = 引出.向き;
+      const 長さ = Math.hypot(dx, dy);
+      if (長さ > 0) {
+        out.doglegs.push([ex, ey, ex + (dx / 長さ) * 引出.長さ, ey + (dy / 長さ) * 引出.長さ]);
+      }
+    }
+    引出 = null;
+  };
+
+  for (const [code, value] of g) {
+    const s = typeof value === 'string' ? value.trim() : '';
+
+    // ---- 入れ子の区切り（番号ではなく、値の文字で見分ける）----
+    if (code >= 300 && code <= 305) {
+      if (s.endsWith('{')) {
+        const 名前 = s.slice(0, -1);
+        入れ子.push(名前);
+        if (名前 === 'LEADER_LINE') { 線 = []; 点 = null; }
+        if (名前 === 'LEADER') 引出 = { 終点: null, 向き: null, 長さ: 0 };
+        continue;
+      }
+      if (s === '}') {
+        const 閉じた = 入れ子.pop();
+        if (閉じた === 'LEADER_LINE') 線をしまう();
+        if (閉じた === 'LEADER') 引出をしまう();
+        continue;
+      }
+      // 区切りでない304は、文字の中身
+      if (code === 304 && いまどこ() === 'CONTEXT_DATA') out.text += String(value ?? '');
+      continue;
+    }
+
+    const ここ = いまどこ();
+
+    if (ここ === 'LEADER_LINE' && 線) {
+      if (code === 10) { 点 = [num(value), 0]; 線.push(点); }
+      else if (code === 20 && 点) 点[1] = num(value);
+      continue;
+    }
+
+    if (ここ === 'LEADER' && 引出) {
+      if (code === 10) 引出.終点 = [num(value), 0];
+      else if (code === 20 && 引出.終点) 引出.終点[1] = num(value);
+      else if (code === 11) 引出.向き = [num(value), 0];
+      else if (code === 21 && 引出.向き) 引出.向き[1] = num(value);
+      else if (code === 40) 引出.長さ = num(value);
+      continue;
+    }
+
+    if (ここ === 'CONTEXT_DATA') {
+      if (code === 12) out.textX = num(value);
+      else if (code === 22) out.textY = num(value);
+      else if (code === 41) out.height = num(value);
+      else if (code === 13) out.向きX = num(value);
+      else if (code === 23) out.向きY = num(value);
+    }
+  }
+
+  // 閉じかっこが足りない壊れたファイルでも、作りかけを捨てない
+  線をしまう();
+  引出をしまう();
+
+  // 文字の傾きは、向きの矢印（13,23）から求める。
+  // コード42（回転）は単位（度かラジアンか）が書き方によって変わるので当てにしない。
+  if (out.向きX || out.向きY) {
+    out.rotation = normalizeAngle((Math.atan2(out.向きY || 0, out.向きX || 0) * 180) / Math.PI);
+  }
+  return out;
+}
+
+/**
+ * MULTILEADER（引出線）を、線と文字に直して図面に足す（開発ルール46章）。
+ *
+ * **新しい図形の種類は増やさない。** 引出線は「折れ線」、文字は「文字」に直す。
+ *
+ * 矢印の頭（黒い三角）は出さない。このアプリに塗りつぶす仕組みが無いためで、
+ * 線がどこを指しているかは折れ線だけで分かる（38.3(c)と同じ考え）。
+ *
+ * @returns {boolean} 何か描けたら true
+ */
+function convertMLeader(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const layer = effectiveLayer(g, ctx);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const flip = isExtrusionFlippedX(g);
+  const 向きを直す = (x) => flipXIf(flip, x);
+
+  const m = parseMLeaderGroups(g);
+  let 描いた = false;
+
+  for (const 線 of m.lines) {
+    emitPolyline(drawing, ctx, layer, color, 線.map(([x, y]) => [向きを直す(x), y]), false);
+    描いた = true;
+  }
+  for (const [x1, y1, x2, y2] of m.doglegs) {
+    emitLine(drawing, ctx, layer, color, 向きを直す(x1), y1, 向きを直す(x2), y2);
+    描いた = true;
+  }
+
+  const text = cleanMText(m.text);
+  if (text.trim() !== '') {
+    const height = m.height > 0 ? m.height : 2.5;
+    const rotation = mirrorRotation(flip, m.rotation ?? 0);
+    // 引出線の文字は、線の先から右へ伸びる。左ぞろえ・高さはまん中が近い
+    emitText(drawing, ctx, layer, color, 向きを直す(m.textX), m.textY, height, rotation, text, {
+      h: 'left',
+      v: 'middle',
+    });
+    描いた = true;
+  }
+
+  return 描いた;
 }
 
 // SOLID：4点。3点目と4点目が同じなら三角形（開発ルールの指示どおり）
@@ -1452,6 +1725,16 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
         convertSolid(rec, drawing, ctx, layerColorMap);
       } else if (rec.type === 'HATCH') {
         convertHatch(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'ATTRIB') {
+        // 部品に入っている実際の文字（機器番号など）。INSERTのすぐ後ろに並ぶ
+        convertAttrib(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'ATTDEF') {
+        // 文字の「枠」の定義。ほとんどの場合は描かないし、数えもしない（18.1）
+        convertAttdef(rec, drawing, ctx, layerColorMap);
+      } else if (rec.type === 'MULTILEADER' || rec.type === 'MLEADER') {
+        if (!convertMLeader(rec, drawing, ctx, layerColorMap)) {
+          countUnsupported(drawing, 'MULTILEADER（中身が読み取れない）');
+        }
       } else if (rec.type === 'SPLINE') {
         // 自由曲線は折れ線に直して、いつもの道に乗せる（開発ルール45章）。
         // 制御点が1つも無いなど、どうしても形にならないものだけ数える。
