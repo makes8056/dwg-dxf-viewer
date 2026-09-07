@@ -177,7 +177,18 @@ export async function saveDrawing(name, buffer) {
       }
     }
 
-    const record = { name, buffer, savedAt: nextSavedAt(), size: buffer.byteLength };
+    // 【書き足した文字を巻き添えにしない（開発ルール43章）】
+    // 同じ図面をもう一度開くと、ここで丸ごと置き換わる。
+    // そのまま書くと、覚えてあった注記が黙って消える。
+    // 前の記録から引き継ぐ。図面が変わっても、書いた文字は本人のものである。
+    const 前の記録 = listRes.result.find((r) => r.name === name);
+    const record = {
+      name,
+      buffer,
+      savedAt: nextSavedAt(),
+      size: buffer.byteLength,
+      notes: (前の記録 && Array.isArray(前の記録.notes)) ? 前の記録.notes : [],
+    };
     const putRes = await reqPromise(store.put(record));
     if (!putRes.ok) {
       // ここが容量オーバー（QuotaExceededError）などの主な出口。
@@ -207,7 +218,12 @@ export async function loadLatestDrawing() {
     if (!res.ok || !res.result || res.result.length === 0) return null;
 
     const latest = res.result.reduce((newest, r) => (r.savedAt > newest.savedAt ? r : newest));
-    return { name: latest.name, buffer: latest.buffer, savedAt: latest.savedAt };
+    return {
+      name: latest.name,
+      buffer: latest.buffer,
+      savedAt: latest.savedAt,
+      notes: Array.isArray(latest.notes) ? latest.notes : [],
+    };
   } catch (e) {
     warn('最近開いた図面を取り出すときに問題が起きました', e);
     return null;
@@ -255,10 +271,57 @@ export async function loadDrawing(name) {
     if (!res.ok || !res.result) return null;
 
     const r = res.result;
-    return { name: r.name, buffer: r.buffer, savedAt: r.savedAt };
+    return {
+      name: r.name,
+      buffer: r.buffer,
+      savedAt: r.savedAt,
+      notes: Array.isArray(r.notes) ? r.notes : [],
+    };
   } catch (e) {
     warn('図面を取り出すときに問題が起きました', e);
     return null;
+  } finally {
+    closeQuietly(db);
+  }
+}
+
+/**
+ * 図面に書き足した文字（注記）だけを覚え直す（開発ルール43章）。
+ *
+ * 【図面の中身（buffer）には触らない】
+ * お客様のファイルは書き換えない。注記は端末の中に、図面と別に覚えておく。
+ * ここで buffer を読み書きしないので、大きな図面でも軽い。
+ *
+ * まだその図面を覚えていないときは、何もしないで false を返す
+ * （図面より先に注記だけが残ると、行き場のない記録になる）。
+ *
+ * @param {string} name ファイル名
+ * @param {Array<object>} notes src/notes.js の notesToStore が作る形
+ * @returns {Promise<boolean>} 覚えられたら true（例外を投げない）
+ */
+export async function saveNotes(name, notes) {
+  if (typeof name !== 'string' || !name || !Array.isArray(notes)) return false;
+
+  const db = await openDB();
+  if (!db) return false;
+
+  try {
+    const store = db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME);
+    const res = await reqPromise(store.get(name));
+    if (!res.ok || !res.result) return false;
+
+    const record = { ...res.result, notes };
+    // savedAt は変えない。文字を書いただけで「いちばん新しい図面」の順が入れ替わると、
+    // 次に開いたときに別の図面が出てきて驚かせる。
+    const putRes = await reqPromise(store.put(record));
+    if (!putRes.ok) {
+      warn('書き足した文字を覚えられませんでした', putRes.error);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    warn('書き足した文字を覚える処理で問題が起きました', e);
+    return false;
   } finally {
     closeQuietly(db);
   }

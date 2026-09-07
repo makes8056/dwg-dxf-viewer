@@ -1,6 +1,6 @@
 // toolbar.js — 画面のボタン類（開発ルール2.2：1ファイル1役割）
 //
-// このアプリで用意するボタンは、この5つだけ（むやみに増やさない）。
+// このアプリで用意するボタンは、この6つだけ（むやみに増やさない）。
 //   図面を開く／図面を選ぶ／全体表示／長さを測る／印刷する範囲
 //
 // 【「拡大」「縮小」ボタンは外した（v0.2.4／ユーザー判断）】
@@ -38,6 +38,13 @@ const ICONS = {
       <path d="M6.5 11.5V7M12 11.5V4.5M17.5 11.5V7"
             fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
     </svg>`,
+  // 文字を書く：鉛筆の絵
+  note: `
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 20l1-4.2L15.6 5.2a1.8 1.8 0 0 1 2.5 0l0.7 0.7a1.8 1.8 0 0 1 0 2.5L8.2 19 4 20z"
+            fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+      <line x1="14.2" y1="6.6" x2="17.4" y2="9.8" stroke="currentColor" stroke-width="1.7" />
+    </svg>`,
   // 印刷する範囲：プリンターの絵に、囲みを表す点線の四角を重ねる
   print: `
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -57,6 +64,7 @@ const BUTTONS = [
   { action: 'recent', icon: ICONS.recent, label: '図面を選ぶ' },
   { action: 'fit', icon: ICONS.fit, label: '全体表示' },
   { action: 'measure', icon: ICONS.measure, label: '長さを測る' },
+  { action: 'note', icon: ICONS.note, label: '文字を書く' },
   // このアプリの一番の目的（開発ルール26章）。右端に置いて押し間違えを減らす。
   { action: 'print', icon: ICONS.print, label: '印刷する範囲' },
 ];
@@ -69,6 +77,7 @@ const BUTTONS = [
  *   onRecent()  … 「図面を選ぶ」（覚えている図面の一覧）が押された
  *   onFit()     … 「全体表示」が押された
  *   onMeasure() … 「長さを測る」が押された
+ *   onNote()    … 「文字を書く」が押された
  *   onPrint()   … 「印刷する範囲」が押された（範囲を囲むモードに入る）
  * @returns {() => void} 後片付け用。呼ぶとボタンの反応をやめる。
  */
@@ -88,6 +97,7 @@ export function attachToolbar(container, handlers = {}) {
     else if (action === 'recent') handlers.onRecent && handlers.onRecent();
     else if (action === 'fit') handlers.onFit && handlers.onFit();
     else if (action === 'measure') handlers.onMeasure && handlers.onMeasure();
+    else if (action === 'note') handlers.onNote && handlers.onNote();
     else if (action === 'print') handlers.onPrint && handlers.onPrint();
   };
 

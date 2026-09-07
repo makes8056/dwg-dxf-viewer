@@ -14,6 +14,7 @@ import { setupFileOpen } from './file-open.js';
 import { attachGestures } from './gestures.js';
 import {
   saveDrawing,
+  saveNotes,
   loadLatestDrawing,
   loadDrawing,
   listDrawings,
@@ -26,6 +27,19 @@ import { createPrintImage, isAreaBigEnough, countNoPlot } from '../print-area.js
 import { createPrintPdf } from '../print-pdf.js';
 import { isApplePrintShareDevice } from './device.js';
 import { createMeasureUi } from './measure-ui.js';
+import { createNoteUi } from './note-ui.js';
+import {
+  createNote,
+  addNote,
+  moveNote,
+  editNote,
+  deleteNote,
+  listNotes,
+  notesToStore,
+  restoreNotes,
+  noteHeightForScale,
+  NOTE_HEIGHT_PX,
+} from '../notes.js';
 import { findSnapPoint, SNAP_RADIUS_PX } from '../measure.js';
 import { startUpdateCheck } from '../update-check.js';
 
@@ -282,6 +296,8 @@ function redraw() {
   // 図面を動かしたり拡大したりしたら、必ず置き直す。
   // ここを忘れると、印だけが取り残されて**まったく別の場所を測ったように見える。**
   if (measureUi.isActive()) measureUi.refresh();
+  // 書き足した文字の取っ手も、同じ理由で置き直す（43.4）
+  if (noteUi.isActive()) noteUi.refresh();
 }
 
 // ------------------------------------------------------------
@@ -391,6 +407,11 @@ const fileOpener = setupFileOpen({
     setLoadingMessage('読み込み中…');
     currentDrawing = drawing;
     currentName = name || null;
+
+    // 【この図面に書き足してあった文字を戻す（開発ルール43.3）】
+    // 図面のファイルには書き戻していないので、端末に覚えてあるほうから戻す。
+    // 戻すのは待たない。文字より先に図面を出す（20.5と同じ考え方）。
+    if (name) restoreNotesFor(name, drawing);
 
     // この図面を覚えておく（開発ルール20章）。
     // アプリを更新するたびにファイルアプリから開き直させないため。
@@ -726,6 +747,109 @@ const measureUi = createMeasureUi(canvas, {
   onExit: () => { /* モードから抜けただけ。何もしない */ },
 });
 
+// ------------------------------------------------------------
+// 「文字を書く」画面（開発ルール43章）
+//
+// 測る画面と同じで、板をかぶせない。指1本のタップは gestures.js の onTap を回す。
+// 書いた文字そのものは drawing.entities に text として入るので、
+// 画面・印刷の絵・PDF のすべてに、ふつうの文字として出る（43.1）。
+// ------------------------------------------------------------
+const noteUi = createNoteUi(canvas, {
+  toScreen: (x, y) => {
+    const vp = ensureViewport();
+    return vp && viewportMod ? viewportMod.toScreen(vp, x, y) : [0, 0];
+  },
+  getNotes: () => listNotes(currentDrawing),
+
+  onCreate: (x, y, text) => {
+    const vp = ensureViewport();
+    if (!vp || !currentDrawing) return;
+    // 【置いたときに見えている大きさで作る（43.2）】
+    // 図面の単位で決め打ちすると、図面の縮尺しだいで極端な大きさになる。
+    const note = createNote({ x, y, text, height: noteHeightForScale(vp.scale) });
+    if (!note) return;
+    addNote(currentDrawing, note);
+    noteChanged();
+  },
+
+  onMove: (noteId, screenX, screenY) => {
+    const vp = ensureViewport();
+    if (!vp || !viewportMod || !currentDrawing) return;
+    const [x, y] = viewportMod.toDrawing(vp, screenX, screenY);
+    if (!moveNote(currentDrawing, noteId, x, y)) return;
+    noteChanged();
+  },
+
+  onEdit: (noteId, text) => {
+    if (!currentDrawing) return;
+    // 空にして決定したときは消える（notes.js の決まり）
+    if (editNote(currentDrawing, noteId, text) === '見つからない') return;
+    noteChanged();
+  },
+
+  onDelete: (noteId) => {
+    if (!currentDrawing) return;
+    if (!deleteNote(currentDrawing, noteId)) return;
+    noteChanged();
+  },
+
+  onExit: () => { /* モードから抜けただけ。何もしない */ },
+});
+
+/**
+ * 書き足した文字が変わったので、描き直して覚え直す（開発ルール43.3）。
+ *
+ * 【毎回すぐ覚える】
+ * 現場では、書いた直後にアプリを閉じることがふつうにある。
+ * 「あとでまとめて保存」にすると、そこで消える。
+ * 覚えるのは注記だけなので、図面が大きくても軽い。
+ */
+function noteChanged() {
+  scheduleRedraw();
+  noteUi.refresh();
+  if (!currentName || !currentDrawing) return;
+  saveNotes(currentName, notesToStore(currentDrawing)).then((ok) => {
+    if (!ok) console.warn('[DXFビューア] 書き足した文字を覚えておけませんでした。');
+  });
+}
+
+/**
+ * その図面に書き足してあった文字を戻す（開発ルール43.3）。
+ *
+ * 【あとから届いても、取り違えないようにする】
+ * 大きな図面だと、覚えてある文字を取り出している間に
+ * ユーザーが別の図面へ切り替えているかもしれない。
+ * 戻す直前にもう一度、今開いている図面かどうかを確かめる。
+ * ここを省くと、**別の図面に他の図面の文字が現れる。**
+ */
+async function restoreNotesFor(name, drawing) {
+  let saved = null;
+  try {
+    saved = await loadDrawing(name);
+  } catch (err) {
+    console.warn('[DXFビューア] 書き足した文字を取り出せませんでした。', err);
+    return;
+  }
+  if (!saved || !Array.isArray(saved.notes) || saved.notes.length === 0) return;
+  // 待っている間に別の図面へ切り替わっていたら、何もしない
+  if (drawing !== currentDrawing) return;
+
+  restoreNotes(drawing, saved.notes);
+  scheduleRedraw();
+  if (noteUi.isActive()) noteUi.refresh();
+}
+
+/**
+ * 「文字を書く」ときのタップ。
+ * 画面の位置を図面の座標に直して、文字を入れる窓を出す。
+ */
+function onNoteTap(screenX, screenY) {
+  const vp = ensureViewport();
+  if (!vp || !viewportMod) return;
+  const [x, y] = viewportMod.toDrawing(vp, screenX, screenY);
+  noteUi.tapAt(x, y);
+}
+
 /**
  * 「長さを測る」ときのタップ。
  *
@@ -878,8 +1002,9 @@ attachToolbar(toolbarEl, {
       return;
     }
     hideError();
-    // 長さを測っている最中なら、そちらをやめてから始める（同時には出さない）
+    // 他のモードに入っている最中なら、そちらをやめてから始める（同時には出さない）
     if (measureUi.isActive()) measureUi.stop();
+    if (noteUi.isActive()) noteUi.stop();
     printUi.start();
   },
   onRecent: () => {
@@ -899,9 +1024,25 @@ attachToolbar(toolbarEl, {
       return;
     }
     hideError();
-    // 印刷の範囲を囲んでいる最中なら、そちらをやめてから始める（同時には出さない）
+    // 他のモードに入っている最中なら、そちらをやめてから始める（同時には出さない）
     if (printUi.isActive()) printUi.stop();
+    if (noteUi.isActive()) noteUi.stop();
     measureUi.start();
+  },
+  onNote: () => {
+    if (!viewportMod || !renderMod) {
+      showError('図面を表示する部品がまだ準備できていません。しばらくしてからもう一度お試しください。');
+      return;
+    }
+    if (!currentDrawing) {
+      showError('図面が開かれていません。先に図面を開いてください。');
+      return;
+    }
+    hideError();
+    // 他のモードに入っている最中なら、そちらをやめてから始める（同時には出さない）
+    if (printUi.isActive()) printUi.stop();
+    if (measureUi.isActive()) measureUi.stop();
+    noteUi.start();
   },
   onFit: () => {
     const vp = ensureViewport();
@@ -930,8 +1071,9 @@ attachGestures(canvas, {
     scheduleRedraw();
   },
   onTap: (x, y) => {
-    // 「長さを測る」のときだけ使う。ふだんのタップでは何も起きない
+    // モードに入っているときだけ使う。ふだんのタップでは何も起きない
     if (measureUi.isActive()) onMeasureTap(x, y);
+    else if (noteUi.isActive()) onNoteTap(x, y);
   },
 });
 

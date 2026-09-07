@@ -1,0 +1,239 @@
+/* note-ui.css — 「文字を書く」画面の見た目だけ（開発ルール43章）
+ *
+ * クラス名はすべて nt- で始めて、他とぶつからないようにしています。
+ *
+ * 重ね順（z-index）は 44。測る画面と同じ（この2つは同時には出ません）。
+ *
+ * 【いちばん大事なこと】
+ * この画面の部品は、原則として**指を受け取りません**（pointer-events: none）。
+ * 受け取ってしまうと、2本指の拡大縮小や図面の移動ができなくなります。
+ * 受け取るのはボタンと、注記の取っ手、文字を入れる窓だけです。
+ */
+
+.nt-root {
+  position: fixed;
+  z-index: 44;
+  /* 【重要】指を通す。ここを消すと図面が動かせなくなる */
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.nt-handles {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* 注記をつまむための取っ手。
+ * 文字そのものは render.js が図面として描くので、ここでは出しません。 */
+.nt-handle {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 3px solid #c81e1e;
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  /* 【ここだけ指を受け取る】それ以外は図面の拡大縮小・移動に流れる */
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+}
+
+/* 【見た目は18pxのまま、指で押せる大きさ（44px）を確保する】
+ * このアプリは box-sizing: border-box なので、inset で広げると
+ * 枠線のぶんだけ小さくなる（開発ルール42.4で実際に6px足りなかった）。
+ * 大きさを直接書く。 */
+.nt-handle::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+}
+
+.nt-handle-tsumami {
+  cursor: grabbing;
+  border-color: #8c1d17;
+  box-shadow: 0 0 0 6px rgba(200, 30, 30, 0.25), 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* 上の案内 */
+.nt-guide {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  max-width: calc(100% - 24px);
+  padding: 10px 18px;
+  background: #fdeceb;
+  color: #8c2019;
+  border: 1px solid #f3c4c0;
+  border-radius: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+  pointer-events: none;
+}
+
+.nt-guide-sub {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+/* 下のボタン列 */
+.nt-bar {
+  position: absolute;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  width: min(320px, calc(100% - 24px));
+  /* ここだけは指を受け取る（ボタンがあるため） */
+  pointer-events: auto;
+}
+
+/* 指で押しやすい大きさを必ず確保する（開発ルール11章：1辺44px以上）。 */
+.nt-btn {
+  flex: 1 1 0;
+  min-width: 44px;
+  min-height: 48px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 12px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.nt-close {
+  background: #b3261e;
+  color: #ffffff;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+.nt-close:active {
+  background: #8c1d17;
+}
+
+/* ------------------------------------------------------------
+ * 文字を入れる窓
+ * ------------------------------------------------------------ */
+
+.nt-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 46; /* 範囲を囲む画面(45)よりも前。窓が隠れると入力できない */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.35);
+  /* 窓は指を受け取る（入力するため） */
+  pointer-events: auto;
+}
+
+/* display を指定したので hidden だけでは消えない（開発ルール40.7） */
+.nt-dialog[hidden] {
+  display: none;
+}
+
+.nt-dialog-box {
+  width: min(420px, 100%);
+  padding: 18px;
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
+}
+
+.nt-dialog-title {
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #111111;
+}
+
+.nt-input {
+  display: block;
+  width: 100%;
+  min-height: 52px;
+  padding: 10px 12px;
+  border: 2px solid #cccccc;
+  border-radius: 10px;
+  font-family: inherit;
+  /* 【16px未満にしない】iPadのSafariは、小さい文字の入力欄に触れると
+   * 画面ぜんたいを勝手に拡大します。図面を見ている位置がずれて驚かせます。 */
+  font-size: 17px;
+  color: #111111;
+  background: #ffffff;
+}
+
+.nt-input:focus {
+  outline: none;
+  border-color: #b3261e;
+}
+
+.nt-dialog-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.nt-cancel {
+  background: #f4f4f4;
+  color: #111111;
+}
+
+.nt-cancel:active {
+  background: #e6e6e6;
+}
+
+.nt-delete {
+  background: #f4dedd;
+  color: #8c1d17;
+}
+
+.nt-delete:active {
+  background: #eccbc9;
+}
+
+/* display を指定していないので hidden で消えるが、
+ * flex の子なので念のため書いておく（40.7 と同じ用心）。 */
+.nt-delete[hidden] {
+  display: none;
+}
+
+.nt-ok {
+  background: #b3261e;
+  color: #ffffff;
+}
+
+.nt-ok:active {
+  background: #8c1d17;
+}
+
+/* 【重要】印刷のときは、この画面を紙に出さない（開発ルール26.6）。
+ * 書いた文字そのものは図面として描かれるので紙に出るが、
+ * 取っ手・案内・ボタンは出さない。 */
+@media print {
+  .nt-root {
+    display: none !important;
+  }
+}
