@@ -167,19 +167,18 @@ test('対応していない図形は、捨てずに種類ごとに数える', ()
   const dxf = [
     '0', 'SECTION', '2', 'ENTITIES',
     '0', 'LINE', '8', '0', '62', '7', '10', '0.0', '20', '0.0', '11', '10.0', '21', '0.0',
-    // まだ対応していない種類（45章の時点では 3DFACE と MLINE が残っている）
-    '0', '3DFACE', '8', '0', '62', '7',
-    '10', '0.0', '20', '0.0', '11', '10.0', '21', '0.0', '12', '10.0', '22', '10.0',
-    '0', 'MLINE', '8', '0', '62', '7', '10', '0.0', '20', '0.0',
-    '0', 'MLINE', '8', '0', '62', '7', '10', '5.0', '20', '5.0',
+    // まだ対応していない種類（51章の時点で残っているもの）
+    '0', 'TOLERANCE', '8', '0', '62', '7', '10', '0.0', '20', '0.0',
+    '0', 'XLINE', '8', '0', '62', '7', '10', '0.0', '20', '0.0', '11', '1.0', '21', '0.0',
+    '0', 'XLINE', '8', '0', '62', '7', '10', '5.0', '20', '5.0', '11', '0.0', '21', '1.0',
     '0', 'ENDSEC', '0', 'EOF', '',
   ].join('\r\n');
 
   const d = parseDxf(dxf);
   assert.equal(d.entities.length, 1, '対応している図形（直線）が残っていない');
   assert.equal(d.unsupported.count, 3);
-  assert.equal(d.unsupported.kinds['3DFACE'], 1);
-  assert.equal(d.unsupported.kinds.MLINE, 2);
+  assert.equal(d.unsupported.kinds.TOLERANCE, 1);
+  assert.equal(d.unsupported.kinds.XLINE, 2);
 });
 
 test('もう対応した図形は、「表示できませんでした」に数えない（18.4）', () => {
@@ -1474,4 +1473,150 @@ test('並べ置きが多すぎるときは打ち切り、打ち切ったぶん�
     d.unsupported.kinds['INSERT（並べ置きが多すぎるため打ち切り）'] > 0,
     '打ち切ったことが種類として出ていない'
   );
+});
+
+// ============================================================
+// 3DFACE・MLINE・WIPEOUT 51章
+//
+// ユーザーの指示（2026-09-08）:「これもすべて表示できるようにしてください」
+// ============================================================
+
+/** 線を「(x1,y1)-(x2,y2)」の文字にして、集合として比べられるようにする。 */
+const 線の形 = (e) => `${e.x1},${e.y1}-${e.x2},${e.y2}`;
+
+test('3DFACEは、まわりをぐるっと結んだ形になる（たすきがけにしない）', () => {
+  // 【SOLIDと頂点の順番が違う】SOLIDは 1-2-4-3、3DFACEは 1-2-3-4。
+  // 取り違えると、四角が**ちょうちょ（砂時計）の形**になる。
+  const d = load('face3d.dxf');
+  assert.equal(d.unsupported.count, 0, `数えられている: ${JSON.stringify(d.unsupported.kinds)}`);
+
+  const 四角 = only(d, 'line').filter((e) => e.x1 < 50 && e.x2 < 50).map(線の形).sort();
+  assert.deepEqual(四角, ['0,0-10,0', '0,10-0,0', '10,0-10,10', '10,10-0,10'].sort());
+});
+
+test('3DFACEの「見せない辺」は、線を出さない', () => {
+  // 面をつなげて見せるための指定。全部描くと、**本来は無いはずの線**が図面に出る
+  const d = load('face3d.dxf');
+  const 隠した = only(d, 'line').filter((e) => e.x1 >= 100 && e.x1 < 200);
+  assert.equal(隠した.length, 3, `4辺のうち1辺を隠すので3本のはずが ${隠した.length} 本`);
+  assert.ok(
+    !隠した.map(線の形).includes('110,0-110,10'),
+    '見せない指定の辺（110,0→110,10）を描いている'
+  );
+});
+
+test('3DFACEの三角形は、同じ辺を2回描かない', () => {
+  // 3点目と4点目が同じときは三角形。長さ0の辺を描くと、点が濃くなる
+  const d = load('face3d.dxf');
+  const 三角 = only(d, 'line').filter((e) => e.x1 >= 200);
+  assert.equal(三角.length, 3, `三角形は3辺のはずが ${三角.length} 本`);
+});
+
+test('MLINEは、束ねられた線を1本ずつ折れ線にする', () => {
+  // 【線の種類の表を引かなくてよい】頂点ごとに「ずらす向き」と「ずらす量」が
+  // 図形の中に書いてある。だから表が無くても元の形にもどせる。
+  const d = load('mline.dxf');
+  assert.equal(d.unsupported.count, 0, `数えられている: ${JSON.stringify(d.unsupported.kinds)}`);
+
+  const 直線 = only(d, 'polyline').filter((e) => e.points[0][1] < 100);
+  assert.equal(直線.length, 2, '2本束ねた線が2本になっていない');
+  const 形 = 直線.map((e) => JSON.stringify(e.points)).sort();
+  assert.deepEqual(形, [
+    JSON.stringify([[0, 5], [100, 5]]),
+    JSON.stringify([[0, -5], [100, -5]]),
+  ].sort(), 'ずらす量（41）どおりの位置になっていない');
+});
+
+test('MLINEの「閉じている」指定が、折れ線に伝わる', () => {
+  // 閉じないと、壁の一辺が開いたまま出る
+  const d = load('mline.dxf');
+  const 三角 = only(d, 'polyline').find((e) => e.points[0][1] >= 100);
+  assert.ok(三角, '閉じたMLINEが出ていない');
+  assert.equal(三角.closed, true, '閉じていない');
+  assert.deepEqual(三角.points, [[0, 200], [60, 200], [30, 250]]);
+});
+
+test('WIPEOUTの囲みが、書かれた場所に出る', () => {
+  // 【頂点は -0.5〜+0.5 で書かれている】実物のDWGで確かめた。
+  // 0.5を足してから掛けないと、囲みが**左下へ半分ずれる。**
+  const d = load('wipeout.dxf');
+  assert.equal(d.unsupported.count, 0, `数えられている: ${JSON.stringify(d.unsupported.kinds)}`);
+
+  const 多角形 = only(d, 'polyline').find((e) => e.points[0][0] === 100);
+  assert.ok(多角形, '多角形の囲みが出ていない');
+  assert.equal(多角形.closed, true, '囲みが閉じていない');
+  // 置いた点(100,200)から、横50・縦30
+  assert.deepEqual(多角形.points, [[100, 200], [150, 200], [150, 230], [100, 230]]);
+});
+
+test('WIPEOUTの四角（角2つだけ）も、四隅に広げて描く', () => {
+  // 71=1 のときは、向かい合う2つの角しか書かれていない。
+  // そのまま2点で描くと、**線1本にしかならない。**
+  const d = load('wipeout.dxf');
+  const 四角 = only(d, 'polyline').find((e) => e.points[0][0] === 300);
+  assert.ok(四角, '四角の囲みが出ていない');
+  assert.equal(四角.points.length, 4, `四隅に広げていない（${四角.points.length}点）`);
+  assert.deepEqual(四角.points, [[300, 200], [340, 200], [340, 220], [300, 220]]);
+});
+
+test('形が読み取れないものは、黙って捨てずに数える', () => {
+  // 3種類とも、描けなかったときは種類ごとに数える（10.5）
+  const dxf = [
+    '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'MLINE', '8', '0', '62', '7', '10', '0', '20', '0',
+    '0', 'WIPEOUT', '8', '0', '62', '7', '10', '0', '20', '0',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  assert.equal(d.entities.length, 0);
+  assert.equal(d.unsupported.kinds['MLINE（形が読み取れない）'], 1);
+  assert.equal(d.unsupported.kinds['WIPEOUT（形が読み取れない）'], 1);
+});
+
+test('MLINEのずらす量に、拡大率（コード40）を掛けない', () => {
+  // 41の値はすでに拡大率を掛けたあとの値。重ねて掛けると線の間隔が広がる
+  // （ハッチング38.3(a)・引出線46.7と同じ落とし穴）
+  const dxf = [
+    '0', 'SECTION', '2', 'ENTITIES',
+    '0', 'MLINE', '8', '0', '62', '7', '2', 'STANDARD',
+    '40', '10',           // 拡大率10。これを掛けてはいけない
+    '70', '0', '71', '0', '72', '2', '73', '1',
+    '10', '0', '20', '0', '30', '0',
+    '11', '0', '21', '0', '31', '0', '12', '1', '22', '0', '32', '0',
+    '13', '0', '23', '1', '33', '0', '74', '1', '41', '5', '75', '0',
+    '11', '100', '21', '0', '31', '0', '12', '1', '22', '0', '32', '0',
+    '13', '0', '23', '1', '33', '0', '74', '1', '41', '5', '75', '0',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  const 線 = only(d, 'polyline')[0];
+  assert.ok(線, 'MLINEが出ていない');
+  near(線.points[0][1], 5, '拡大率を重ねて掛けている（5のはずが50になっていないか）');
+});
+
+test('3DFACEで、角が重なっていても長さ0の線を作らない', () => {
+  // 【長さ0の線が残ると】画面ではそこだけ点が濃くなり、
+  // PDFにも余計な図形が入る。角が重なった面は実際の図面にある。
+  const dxf = [
+    '0', 'SECTION', '2', 'ENTITIES',
+    // 1点目と2点目が同じ（＝1辺目の長さが0）
+    '0', '3DFACE', '8', '0', '62', '7', '70', '0',
+    '10', '0', '20', '0', '30', '0',
+    '11', '0', '21', '0', '31', '0',
+    '12', '10', '22', '0', '32', '0',
+    '13', '10', '23', '10', '33', '0',
+    '0', 'ENDSEC', '0', 'EOF', '',
+  ].join('\r\n');
+
+  const d = parseDxf(dxf);
+  const 線 = only(d, 'line');
+  assert.equal(線.length, 3, `長さ0の辺まで描いている（${線.length} 本）`);
+  for (const e of 線) {
+    assert.ok(
+      Math.hypot(e.x2 - e.x1, e.y2 - e.y1) > 0,
+      `長さ0の線が入っている（${e.x1},${e.y1}）`
+    );
+  }
 });

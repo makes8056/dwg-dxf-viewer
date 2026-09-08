@@ -9,7 +9,7 @@
 //   3. INSERT（部品の配置）は、その場で line / arc などに展開する（開発ルール10.4）
 //   4. 色は drawing.js の aciToCss() / rgbToCss() だけを使う（色の表はここでは作らない）
 //
-// 対応できない図形（3DFACE・MLINEなど）は countUnsupported() で数える（10.5：黙って捨てない）。
+// 対応できない図形（TOLERANCE・XLINEなど）は countUnsupported() で数える（10.5：黙って捨てない）。
 
 import {
   createDrawing,
@@ -1683,6 +1683,187 @@ function convertSolid(rec, drawing, ctx, layerColorMap) {
   emitPolyline(drawing, ctx, layer, color, points, true);
 }
 
+/**
+ * 3DFACE（3次元の面）を、輪郭の線に直して図面に足す（開発ルール51章）。
+ *
+ * 【SOLIDと似ているが、頂点の順番が違う】
+ *   SOLID  … 1-2-4-3 の順に結ぶ（たすきがけの順で書かれる決まり）
+ *   3DFACE … 1-2-3-4 の順に、まわりをぐるっと結ぶ
+ *   ここを取り違えると、**四角がちょうちょ（砂時計）の形になる。**
+ *
+ * 【辺ごとに「見せない」指定がある】
+ *   コード70の 1・2・4・8 のくらいが、それぞれ1辺目〜4辺目に対応する。
+ *   立った印の辺は、CADでも線を出さない（面をつなげて見せるための指定）。
+ *   全部の辺を描くと、**本来は無いはずの線が図面に出る。**
+ *   そこで閉じた折れ線ではなく、**見せる辺だけを線として**描く。
+ */
+function convert3dFace(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = effectiveLayer(g, ctx);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+
+  const 点 = (xc, yc) => [flipXIf(flip, num(firstValue(g, xc))), num(firstValue(g, yc))];
+  const p1 = 点(10, 20);
+  const p2 = 点(11, 21);
+  const p3 = 点(12, 22);
+  const p4 = firstValue(g, 13) === undefined ? p3 : 点(13, 23);
+
+  // 3点目と4点目が同じなら三角形。同じ辺を2回描かない
+  const 同じ = (a, b) => a[0] === b[0] && a[1] === b[1];
+  const 頂点 = 同じ(p3, p4) ? [p1, p2, p3] : [p1, p2, p3, p4];
+
+  const 見せない = num(firstValue(g, 70), 0);
+  let 描いた = 0;
+  for (let i = 0; i < 頂点.length; i++) {
+    // コード70の 1,2,4,8 のくらいが、1辺目〜4辺目の「見せない」指定
+    if ((見せない & (1 << i)) !== 0) continue;
+    const a = 頂点[i];
+    const b = 頂点[(i + 1) % 頂点.length];
+    if (同じ(a, b)) continue; // 長さ0の辺は描かない
+    emitLine(drawing, ctx, layer, color, a[0], a[1], b[0], b[1]);
+    描いた += 1;
+  }
+  return 描いた > 0;
+}
+
+/**
+ * MLINE（多重線）を、ふつうの折れ線に直して図面に足す（開発ルール51章）。
+ *
+ * 【多重線とは】
+ *   1本引くと、平行な線が何本かまとめて引かれるもの。壁や側溝を1本で描くのに使う。
+ *
+ * 【線の形は、図形の中にそのまま入っている】
+ *   「線の種類（MLINESTYLE）の表を引かないと形が分からない」と思いがちだが、
+ *   **頂点ごとに「ずらす向き」と「ずらす量」が書いてある。**
+ *     13,23 … その頂点で、線をずらす向き（角のところは斜めになる）
+ *     41    … 何本目の線を、どれだけずらすか
+ *   だから表を引かなくても、頂点をずらしていくだけで元の形にもどせる。
+ *
+ * 【ずらす量に、拡大率（コード40）を掛けない】
+ *   41の値は**すでに拡大率を掛けたあとの値**である。
+ *   重ねて掛けると、線と線のあいだが広がってしまう。
+ *   ハッチング（38.3(a)）・引出線（46.7）と同じ落とし穴。
+ *
+ * @returns {boolean} 何か描けたら true
+ */
+function convertMline(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = effectiveLayer(g, ctx);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+  const flags = num(firstValue(g, 71), 0);
+  const closed = (flags & 2) === 2;
+
+  // 頂点は出てくる順に読む。並び順に意味がある
+  const 頂点たち = [];
+  let 今の頂点 = null;
+  let 今の要素 = null;
+  for (const [code, value] of g) {
+    if (code === 11) {
+      今の頂点 = { x: num(value), y: 0, mx: 0, my: 0, 要素: [] };
+      頂点たち.push(今の頂点);
+      今の要素 = null;
+      continue;
+    }
+    if (!今の頂点) continue;
+    if (code === 21) 今の頂点.y = num(value);
+    else if (code === 13) 今の頂点.mx = num(value);
+    else if (code === 23) 今の頂点.my = num(value);
+    else if (code === 74) {
+      今の要素 = [];
+      今の頂点.要素.push(今の要素);
+    } else if (code === 41 && 今の要素) 今の要素.push(num(value));
+  }
+
+  if (頂点たち.length < 2) return false;
+
+  // 何本の線が束ねられているか（頂点によって欠けている図面もあるので、いちばん多いものに合わせる）
+  const 本数 = 頂点たち.reduce((n, v) => Math.max(n, v.要素.length), 0);
+  if (本数 === 0) return false;
+
+  let 描いた = 0;
+  for (let e = 0; e < 本数; e++) {
+    const 点たち = [];
+    for (const v of 頂点たち) {
+      const 目 = v.要素[e];
+      if (!目 || 目.length === 0) continue; // その頂点にこの線が無い（壊れた図面）
+      const ずらし = 目[0]; // 1つめが「その頂点でのずらす量」
+      点たち.push([flipXIf(flip, v.x + v.mx * ずらし), v.y + v.my * ずらし]);
+    }
+    if (点たち.length < 2) continue;
+    emitPolyline(drawing, ctx, layer, color, 点たち, closed);
+    描いた += 1;
+  }
+  return 描いた > 0;
+}
+
+/**
+ * WIPEOUT（下を隠す図形）の囲みを、線に直して図面に足す（開発ルール51章）。
+ *
+ * 【WIPEOUTとは】
+ *   その範囲を**白く塗りつぶして、下にある線を隠す**もの。
+ *   文字の後ろに敷いて、下の線と重なって読めなくなるのを防ぐのに使う。
+ *
+ * 【このアプリにできること・できないこと】
+ *   塗りつぶして隠す仕組みが無いので、**隠すことはできない。**
+ *   何も出さないと「そこに何かある」ことすら分からないので、
+ *   **囲みの形だけ描く**（ハッチングのべた塗り 38.3(c) と同じ扱い）。
+ *
+ * 【座標の直し方（実物のDWGで確かめた）】
+ *   10,20 … 置いた点（左下）
+ *   11,21 … 横に1つぶん進む向きと長さ
+ *   12,22 … 縦に1つぶん進む向きと長さ
+ *   14,24 … 囲みの頂点。**-0.5〜+0.5 で書かれている**ので、0.5 を足してから掛ける
+ *   実物では 11,21 が (524.28, 0)、12,22 が (0, 524.28) で、
+ *   頂点が -0.5〜0.5 の範囲だった。0.5を足さないと、囲みが左下へ半分ずれる。
+ *
+ * @returns {boolean} 何か描けたら true
+ */
+function convertWipeout(rec, drawing, ctx, layerColorMap) {
+  const g = rec.groups;
+  const flip = isExtrusionFlippedX(g);
+  const layer = effectiveLayer(g, ctx);
+  const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
+
+  const ox = num(firstValue(g, 10));
+  const oy = num(firstValue(g, 20));
+  const ux = num(firstValue(g, 11));
+  const uy = num(firstValue(g, 21));
+  const vx = num(firstValue(g, 12));
+  const vy = num(firstValue(g, 22));
+
+  // 囲みの頂点（14,24）を、出てくる順に読む
+  const 生の頂点 = [];
+  let 今 = null;
+  for (const [code, value] of g) {
+    if (code === 14) {
+      今 = [num(value), 0];
+      生の頂点.push(今);
+    } else if (code === 24 && 今) 今[1] = num(value);
+  }
+  if (生の頂点.length < 2) return false;
+
+  const 世界へ = ([px, py]) => [
+    flipXIf(flip, ox + ux * (px + 0.5) + vx * (py + 0.5)),
+    oy + uy * (px + 0.5) + vy * (py + 0.5),
+  ];
+
+  // 71 が 1 なら四角（向かい合う2つの角だけが書いてある）。2 なら多角形
+  const 種類 = num(firstValue(g, 71), 2);
+  let 点たち;
+  if (種類 === 1 && 生の頂点.length === 2) {
+    const [a, b] = 生の頂点;
+    点たち = [a, [b[0], a[1]], b, [a[0], b[1]]].map(世界へ);
+  } else {
+    点たち = 生の頂点.map(世界へ);
+  }
+  if (点たち.length < 3) return false;
+
+  emitPolyline(drawing, ctx, layer, color, 点たち, true);
+  return true;
+}
+
 // ============================================================
 // INSERT（ブロックの配置）を展開する
 // ============================================================
@@ -1947,6 +2128,21 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
         if (!convertMLeader(rec, drawing, ctx, layerColorMap)) {
           countUnsupported(drawing, 'MULTILEADER（中身が読み取れない）');
         }
+      } else if (rec.type === '3DFACE') {
+        // 3次元の面。輪郭の線に直す（見せない指定の辺は出さない。開発ルール51章）
+        if (!convert3dFace(rec, drawing, ctx, layerColorMap)) {
+          countUnsupported(drawing, '3DFACE（形が読み取れない）');
+        }
+      } else if (rec.type === 'MLINE') {
+        // 多重線。束ねられた線を1本ずつ折れ線に直す（51章）
+        if (!convertMline(rec, drawing, ctx, layerColorMap)) {
+          countUnsupported(drawing, 'MLINE（形が読み取れない）');
+        }
+      } else if (rec.type === 'WIPEOUT') {
+        // 下を隠す図形。塗りつぶせないので、囲みの形だけ描く（51章）
+        if (!convertWipeout(rec, drawing, ctx, layerColorMap)) {
+          countUnsupported(drawing, 'WIPEOUT（形が読み取れない）');
+        }
       } else if (rec.type === 'SPLINE') {
         // 自由曲線は折れ線に直して、いつもの道に乗せる（開発ルール45章）。
         // 制御点が1つも無いなど、どうしても形にならないものだけ数える。
@@ -1973,7 +2169,7 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
         // **本当に足りていない図形が埋もれてしまいます。** そのため数えません。
         // 図面の見た目は何も変わりません。
       } else {
-        // 3DFACE / MLINE など
+        // まだ描けない種類（TOLERANCE・XLINE など）
         // → 開発ルール10.5：黙って捨てず、種類ごとに数える
         countUnsupported(drawing, rec.type || '不明');
       }
