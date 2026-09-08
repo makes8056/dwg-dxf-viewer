@@ -498,13 +498,6 @@ function mirrorRotation(flip, rotationDeg) {
   return flip ? 180 - rotationDeg : rotationDeg;
 }
 
-// 楕円の「どこからどこまで」も、X反転で回る向きが逆になる。
-// 楕円の角度は円弧と数え方が違う（つぶす前の円で測る）ので、
-// 180から引くのではなく **符号を反転して入れ替える**。
-function mirrorEllipseAngles(flip, startAngle, endAngle) {
-  if (!flip) return [startAngle, endAngle];
-  return [-endAngle, -startAngle];
-}
 
 // ============================================================
 // 色の決めごと（開発ルール・落とし穴5）
@@ -780,15 +773,24 @@ function convertLine(rec, drawing, ctx, layerColorMap) {
  */
 function convertEllipse(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
-  const flip = isExtrusionFlippedX(g);
+  // 【楕円は「押し出しZ＝−1」でも左右反転させない（開発ルール52章）】
+  //
+  // DXFの決まりでは、**楕円の座標だけは最初から図面全体の座標（WCS）**で書かれている。
+  // 円や円弧・文字は「その図形の面の中での座標（OCS）」なので、
+  // 押し出しが裏向き（Zが−1）のときは左右を裏返して読む必要があるが、
+  // **楕円は裏返してはいけない。**
+  //
+  // お客様の図面で、これをやって痛い目を見た。
+  // 押し出しZ＝−1の楕円が644個あり、全部を左右反対の何もない場所へ飛ばしていた。
+  // 画面には「図面に無いはずの水色の点」が散らばって見えていた。
   const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
 
-  const cx = flipXIf(flip, num(firstValue(g, 10)));
+  const cx = num(firstValue(g, 10));
   const cy = num(firstValue(g, 20));
 
   // 長いほうの軸の端。中心からの相対位置なので、そのまま向きと長さになる
-  const majorX = flipXIf(flip, num(firstValue(g, 11)));
+  const majorX = num(firstValue(g, 11));
   const majorY = num(firstValue(g, 21));
 
   const rx = Math.hypot(majorX, majorY);
@@ -799,18 +801,13 @@ function convertEllipse(rec, drawing, ctx, layerColorMap) {
   const ratio = num(firstValue(g, 40), 1);
   const ry = rx * Math.abs(ratio);
 
-  // 長いほうの軸が何度傾いているか。
-  // majorX はすでに上で反転させてあるので、**ここで重ねて反転させてはいけない。**
-  // （以前は 180 から引く処理が重なっていて、反転が打ち消し合っていた。開発ルール47.4）
+  // 長いほうの軸が何度傾いているか
   const rotationDeg = (Math.atan2(majorY, majorX) * 180) / Math.PI;
 
   // 41・42 は「ラジアン」。度に直す。省略時は一周。
   const toDeg = (rad) => (rad * 180) / Math.PI;
-  const [startAngle, endAngle] = mirrorEllipseAngles(
-    flip,
-    toDeg(num(firstValue(g, 41), 0)),
-    toDeg(num(firstValue(g, 42), Math.PI * 2))
-  );
+  const startAngle = toDeg(num(firstValue(g, 41), 0));
+  const endAngle = toDeg(num(firstValue(g, 42), Math.PI * 2));
 
   emitEllipse(drawing, ctx, layer, color, cx, cy, rx, ry, rotationDeg, startAngle, endAngle);
 }
@@ -1181,7 +1178,7 @@ function convertOldPolyline(headerRec, vertexRecs, drawing, ctx, layerColorMap) 
  */
 function convertSpline(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
-  const flip = isExtrusionFlippedX(g);
+  // 自由曲線の座標も、楕円と同じくWCS。押し出しZ＝−1でも裏返さない（52章）
   const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
 
@@ -1202,12 +1199,12 @@ function convertSpline(rec, drawing, ctx, layerColorMap) {
     } else if (code === 41) {
       weights.push(num(value, 1));
     } else if (code === 10) {
-      ctrl = [flipXIf(flip, num(value)), 0];
+      ctrl = [num(value), 0];
       controlPoints.push(ctrl);
     } else if (code === 20 && ctrl) {
       ctrl[1] = num(value);
     } else if (code === 11) {
-      fitPt = [flipXIf(flip, num(value)), 0];
+      fitPt = [num(value), 0];
       fitPoints.push(fitPt);
     } else if (code === 21 && fitPt) {
       fitPt[1] = num(value);
@@ -1699,11 +1696,11 @@ function convertSolid(rec, drawing, ctx, layerColorMap) {
  */
 function convert3dFace(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
-  const flip = isExtrusionFlippedX(g);
+  // 3次元の面の座標もWCS。押し出しZ＝−1でも裏返さない（52章）
   const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
 
-  const 点 = (xc, yc) => [flipXIf(flip, num(firstValue(g, xc))), num(firstValue(g, yc))];
+  const 点 = (xc, yc) => [num(firstValue(g, xc)), num(firstValue(g, yc))];
   const p1 = 点(10, 20);
   const p2 = 点(11, 21);
   const p3 = 点(12, 22);
@@ -1749,7 +1746,7 @@ function convert3dFace(rec, drawing, ctx, layerColorMap) {
  */
 function convertMline(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
-  const flip = isExtrusionFlippedX(g);
+  // 多重線の座標もWCS。押し出しZ＝−1でも裏返さない（52章）
   const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
   const flags = num(firstValue(g, 71), 0);
@@ -1789,7 +1786,7 @@ function convertMline(rec, drawing, ctx, layerColorMap) {
       const 目 = v.要素[e];
       if (!目 || 目.length === 0) continue; // その頂点にこの線が無い（壊れた図面）
       const ずらし = 目[0]; // 1つめが「その頂点でのずらす量」
-      点たち.push([flipXIf(flip, v.x + v.mx * ずらし), v.y + v.my * ずらし]);
+      点たち.push([v.x + v.mx * ずらし, v.y + v.my * ずらし]);
     }
     if (点たち.length < 2) continue;
     emitPolyline(drawing, ctx, layer, color, 点たち, closed);
@@ -1822,7 +1819,7 @@ function convertMline(rec, drawing, ctx, layerColorMap) {
  */
 function convertWipeout(rec, drawing, ctx, layerColorMap) {
   const g = rec.groups;
-  const flip = isExtrusionFlippedX(g);
+  // 隠す図形の置いた点・向きもWCS。押し出しZ＝−1でも裏返さない（52章）
   const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
 
@@ -1845,7 +1842,7 @@ function convertWipeout(rec, drawing, ctx, layerColorMap) {
   if (生の頂点.length < 2) return false;
 
   const 世界へ = ([px, py]) => [
-    flipXIf(flip, ox + ux * (px + 0.5) + vx * (py + 0.5)),
+    ox + ux * (px + 0.5) + vx * (py + 0.5),
     oy + uy * (px + 0.5) + vy * (py + 0.5),
   ];
 
