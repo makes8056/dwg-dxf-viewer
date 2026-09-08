@@ -1690,6 +1690,13 @@ function convertSolid(rec, drawing, ctx, layerColorMap) {
 const MAX_BLOCK_DEPTH = 20; // 入れ子ブロックの無限ループ対策
 
 /**
+ * 1つの並べ置きで、部品を何個まで並べるか（開発ルール50章）。
+ * 壊れた図面に「横1万個・縦1万個」と書かれていると、そのまま並べると固まる。
+ * hatch.js の MAX_HATCH_LINES と同じ考えの安全装置で、**当たらないのが正常。**
+ */
+const MAX_ARRAY_COPIES = 1000;
+
+/**
  * 寸法（DIMENSION）を展開する。
  *
  * 【実物の図面で調べて分かったこと】
@@ -1777,36 +1784,79 @@ function expandInsert(rec, drawing, ctx, blocks, layerColorMap) {
   const scaleY = num(firstValue(g, 42), 1);
   const rotationDeg = num(firstValue(g, 50), 0);
 
-  const localMatrix = makeInsertMatrix({
-    baseX: block.base.x,
-    baseY: block.base.y,
-    scaleX,
-    scaleY,
-    rotationDeg,
-    insertX,
-    insertY,
-    flipX: flip,
-  });
+  // 【並べ置き（同じ部品を格子状にくり返す書き方）。開発ルール50章】
+  //   70…横に何個  71…縦に何個  44…横の間隔  45…縦の間隔
+  //
+  // CADは「ここに1個。それを横3・縦2でくり返す」という**1つの指示**で
+  // 6個ぶんを表す。これを読み飛ばすと、**6個あるのに1個しか出ない。**
+  // しかも読み飛ばしたことに気づかないので、「表示できませんでした」にも出ない。
+  //
+  // 【間隔の決まり（仕様で確認）】
+  //   並べる向きは**回転（コード50）に従う**が、**拡大率や鏡像は掛けない。**
+  //   拡大率まで掛けると、部品だけでなく並びの間隔まで伸び縮みしてしまう。
+  const 列数 = Math.max(1, Math.floor(num(firstValue(g, 70), 1)) || 1);
+  const 行数 = Math.max(1, Math.floor(num(firstValue(g, 71), 1)) || 1);
+  const 列の間隔 = num(firstValue(g, 44), 0);
+  const 行の間隔 = num(firstValue(g, 45), 0);
 
-  const childCtx = {
-    transform: composeMatrix(ctx.transform, localMatrix),
-    // 大きさは、マイナスでも「何倍か」だけを見る（半径や文字の高さがマイナスにならないように）
-    scale: ctx.scale * ((Math.abs(scaleX) + Math.abs(scaleY)) / 2),
-    inheritedColor: insertColor,
-    depth: ctx.depth + 1,
-    // 【AutoCADの決まり】部品の中身がレイヤー0に描かれていたら、
-    // その中身は**この部品を置いた側のレイヤー**に従う（effectiveLayer 参照）。
-    // これを渡さないと、配管が赤いのにエルボだけ黒、といったことが起きる。
-    insertLayer: layer,
-    // 寸法の内側かどうかは、その下の部品にも引き継ぐ（矢印は部品として入っている）
-    insideDimension: ctx.insideDimension === true,
-  };
+  const rad = (rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
 
-  // 列（COLUMN）・行（ROW）の繰り返し配置（70,71,44,45）はv1では対応しない。
-  // 対応していないと分かるよう、繰り返しがある場合は1個ぶんだけ展開して報告に混ぜない
-  // （見た目としては1個でも図形が出るほうが、何も出ないより安全なため）。
+  // 【上限を置く（10.5・38.3(e)と同じ考え）】
+  // 壊れた図面に「横1万個・縦1万個」と書かれていると、そのまま並べると固まる。
+  // 打ち切ったぶんは黙って捨てず、数えて画面に出す。
+  let 残り = MAX_ARRAY_COPIES;
+  let 打ち切った = 0;
 
-  expandRecords(block.records, drawing, childCtx, blocks, layerColorMap);
+  for (let 行 = 0; 行 < 行数; 行++) {
+    for (let 列 = 0; 列 < 列数; 列++) {
+      if (残り <= 0) {
+        打ち切った += 1;
+        continue;
+      }
+      残り -= 1;
+      const dx = 列 * 列の間隔;
+      const dy = 行 * 行の間隔;
+      置く(insertX + dx * cos - dy * sin, insertY + dx * sin + dy * cos);
+    }
+  }
+  if (打ち切った > 0) {
+    for (let i = 0; i < 打ち切った; i++) {
+      countUnsupported(drawing, 'INSERT（並べ置きが多すぎるため打ち切り）');
+    }
+  }
+  return;
+
+  /** 部品を1つぶん、その場所に展開する。 */
+  function 置く(ox, oy) {
+    const localMatrix = makeInsertMatrix({
+      baseX: block.base.x,
+      baseY: block.base.y,
+      scaleX,
+      scaleY,
+      rotationDeg,
+      insertX: ox,
+      insertY: oy,
+      flipX: flip,
+    });
+
+    const childCtx = {
+      transform: composeMatrix(ctx.transform, localMatrix),
+      // 大きさは、マイナスでも「何倍か」だけを見る（半径や文字の高さがマイナスにならないように）
+      scale: ctx.scale * ((Math.abs(scaleX) + Math.abs(scaleY)) / 2),
+      inheritedColor: insertColor,
+      depth: ctx.depth + 1,
+      // 【AutoCADの決まり】部品の中身がレイヤー0に描かれていたら、
+      // その中身は**この部品を置いた側のレイヤー**に従う（effectiveLayer 参照）。
+      // これを渡さないと、配管が赤いのにエルボだけ黒、といったことが起きる。
+      insertLayer: layer,
+      // 寸法の内側かどうかは、その下の部品にも引き継ぐ（矢印は部品として入っている）
+      insideDimension: ctx.insideDimension === true,
+    };
+
+    expandRecords(block.records, drawing, childCtx, blocks, layerColorMap);
+  }
 }
 
 // ============================================================
