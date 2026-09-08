@@ -20,6 +20,7 @@ import {
   PT_PER_MM,
 } from '../src/print-pdf.js';
 import { computePrintPlacement, renderPrintCanvas } from '../src/print-area.js';
+import { CAP_HEIGHT_RATIO } from '../src/drawing.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -474,4 +475,62 @@ test('ふつうの線は、今までどおりPDFに入る', () => {
   const r = createPrintPdf(四角い図面(0, 0, 100, 100), area, { createCanvas: makeFakeCanvas });
   assert.ok(!r.error);
   assert.ok(r.drawn >= 4, `ふつうの線まで消えている（${r.drawn}本）`);
+});
+
+// ============================================================
+// 文字の大きさ（開発ルール48章）
+//
+// CADの「文字の高さ」は大文字そのものの高さ。PDFの Tf に渡すのは
+// 文字枠ぜんたい（em）の大きさなので、割り戻さないと紙の文字が小さくなる。
+// **画面と同じ割り方でなければ、確認画面と紙で食い違う（36.2）。**
+// ============================================================
+
+test('PDFの文字も、CADの「大文字の高さ」どおりの大きさになる', () => {
+  const area = { minX: 0, minY: 0, maxX: 100, maxY: 100 };
+  const 図面 = {
+    units: 'mm', bounds: area, contentBounds: area, layers: [],
+    entities: [{
+      type: 'text', layer: '0', color: '#000000',
+      x: 10, y: 50, height: 10, rotation: 0, text: 'A89-7',
+    }],
+    unsupported: { count: 0, kinds: {} }, source: 'dxf',
+  };
+  const r = createPrintPdf(図面, area);
+  assert.ok(!r.error, r.error);
+  const t = 文字にする(r.bytes);
+
+  const m = t.match(/\/F1 ([\d.]+) Tf/);
+  assert.ok(m, `文字の大きさの指定（Tf）が見つからない`);
+  const 渡した = Number(m[1]);
+
+  // 紙の上での大文字の高さ（ポイント）
+  const 置き方 = computePrintPlacement(area);
+  const 大文字pt = 10 * 置き方.scale * PT_PER_MM;
+
+  assert.ok(
+    渡した > 大文字pt * 1.15,
+    `文字枠の大きさをそのまま渡している（大文字 ${大文字pt} に対して ${渡した}）`
+  );
+  assert.ok(
+    // PDFは数を丸めて書き出すので、0.01ポイント（紙の上で3.5マイクロメートル）まで許す
+    Math.abs(渡した * CAP_HEIGHT_RATIO - 大文字pt) < 0.01,
+    `割り戻すと ${渡した * CAP_HEIGHT_RATIO} で、指定の ${大文字pt} と合わない`
+  );
+});
+
+test('画面と紙で、文字の大きさの決め方が同じ（36.2）', () => {
+  // 別々の数で割っていると、確認画面では合っているのに紙だけずれる。
+  // 紙に出すまで気づけない、いちばんたちの悪いずれ方になる。
+  const 描く側 = fs.readFileSync(path.join(ROOT, 'src', 'render.js'), 'utf8');
+  const PDF側 = fs.readFileSync(path.join(ROOT, 'src', 'print-pdf.js'), 'utf8');
+  for (const [名, 中身] of [['render.js', 描く側], ['print-pdf.js', PDF側]]) {
+    assert.match(
+      中身, /CAP_HEIGHT_RATIO/,
+      `${名} が、共通の割合（CAP_HEIGHT_RATIO）を使っていない`
+    );
+    assert.match(
+      中身, /from '\.\/drawing\.js'/,
+      `${名} が、割合を drawing.js から取っていない（別々に持つと食い違う）`
+    );
+  }
 });

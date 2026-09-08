@@ -865,12 +865,13 @@ function convertText(rec, drawing, ctx, layerColorMap) {
   const flip = isExtrusionFlippedX(g);
   const layer = effectiveLayer(g, ctx);
   const color = resolveColor(g, layer, layerColorMap, ctx.inheritedColor);
-  const x = flipXIf(flip, num(firstValue(g, 10)));
-  const y = num(firstValue(g, 20));
+  // ふつうの文字にも、位置ぞろえ（72・74）がある。属性の文字（ATTRIB）と同じ扱いにする。
+  // ここを読まないと、中央ぞろえで置かれた記号が左へずれて出る（開発ルール48章）
+  const 点 = textPoint(g, flip);
   const height = num(firstValue(g, 40), 2.5);
   const rotation = mirrorRotation(flip, num(firstValue(g, 50)));
   const text = expandControlCodes(firstValue(g, 1));
-  emitText(drawing, ctx, layer, color, x, y, height, rotation, text);
+  emitText(drawing, ctx, layer, color, 点.x, 点.y, height, rotation, text, textAlign(g));
 }
 
 /**

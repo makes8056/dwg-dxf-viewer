@@ -10,7 +10,7 @@
 //   このファイルでは viewport.toScreen() の結果をそのまま使い、
 //   自分でY座標を反転させたり、符号を直したりしない。
 
-import { computeBounds } from './drawing.js';
+import { computeBounds, CAP_HEIGHT_RATIO } from './drawing.js';
 import { toScreen, visibleBounds } from './viewport.js';
 
 const DEFAULT_BACKGROUND = '#ffffff';
@@ -263,9 +263,15 @@ function toCanvasBaseline(value) {
 }
 
 function drawText(ctx, e, vp) {
-  const fontPx = (e.height || 0) * vp.scale;
+  // CADの高さ ＝ 大文字そのものの高さ。画面での大きさはこれで測る
+  const 大文字px = (e.height || 0) * vp.scale;
   // 小さすぎて読めない文字は描かない（読めない文字で画面が真っ黒になるのを防ぐ）
-  if (!(fontPx >= MIN_READABLE_TEXT_PX)) return false;
+  if (!(大文字px >= MIN_READABLE_TEXT_PX)) return false;
+
+  // Canvasの font に渡すのは**文字枠ぜんたい（em）**の大きさなので、
+  // 大文字の割合で割ってから渡す（開発ルール48章）。
+  // これをしないと文字が3割ちかく小さく、しかも下寄りに出る。
+  const fontPx = 大文字px / CAP_HEIGHT_RATIO;
 
   const [sx, sy] = toScreen(vp, e.x, e.y);
   const rotationDeg = e.rotation || 0;

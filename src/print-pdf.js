@@ -30,6 +30,7 @@
 //                                       ごく少数なので、これで十分に軽い。
 
 import { computePrintPlacement, PRINT_LINE_WIDTH_MM, printableDrawing } from './print-area.js';
+import { CAP_HEIGHT_RATIO } from './drawing.js';
 
 /** 1ミリは何ポイントか。PDFの長さの単位はポイント（1/72インチ）。 */
 export const PT_PER_MM = 72 / 25.4;
@@ -492,7 +493,10 @@ export function createPrintPdf(drawing, area, options = {}) {
       } else if (e.type === 'text') {
         const 文字 = String(e.text == null ? '' : e.text);
         if (!文字) continue;
-        const 高さpt = (e.height || 0) * S;
+        // CADの高さは大文字そのものの高さ。PDFのTfに渡すのは文字枠ぜんたい（em）の
+        // 大きさなので、大文字の割合で割ってから渡す（開発ルール48章）。
+        // 画面と同じ割り方をしないと、確認画面と紙で文字の大きさが食い違う（36.2）
+        const 高さpt = ((e.height || 0) * S) / CAP_HEIGHT_RATIO;
         if (!(高さpt > 0)) continue;
         色を変える(e.color, true);
         if (isWinAnsiText(文字)) {

@@ -8,6 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderDrawing } from '../src/render.js';
 import { createViewport, fitToBounds } from '../src/viewport.js';
+import { CAP_HEIGHT_RATIO } from '../src/drawing.js';
 
 /**
  * Canvasのふりをする入れ物。呼ばれた命令を記録するだけ。
@@ -208,6 +209,71 @@ test('そろえ方の指定が無い文字は、これまでどおり左端・�
   renderDrawing(ctx, drawing, vp, {});
   assert.equal(ctx.textAlign, 'left');
   assert.equal(ctx.textBaseline, 'alphabetic');
+});
+
+// ============================================================
+// 文字の大きさ（48章）
+//
+// 【実物の図面で判明】CADの「文字の高さ」は**大文字そのものの高さ**だが、
+// Canvasの font に渡す数値は**文字枠ぜんたい（em）**の大きさである。
+// そのまま渡すと、文字が3割ちかく小さく、しかも下に寄って出る。
+// 俵型マークの中の記号が中心から外れ、図面番号が小さく出ていた。
+// ============================================================
+
+test('文字は、CADの「大文字の高さ」どおりの大きさで描かれる', () => {
+  const ctx = makeFakeCtx(1000, 600);
+  const vp = createViewport(1000, 600);
+  fitToBounds(vp, { minX: 0, minY: 0, maxX: 100, maxY: 60 });
+  const drawing = {
+    ...SAMPLE,
+    entities: [
+      { type: 'text', layer: '0', color: '#000', x: 50, y: 30, height: 10, rotation: 0, text: 'A89-7' },
+    ],
+  };
+  renderDrawing(ctx, drawing, vp, {});
+
+  const 大文字px = 10 * vp.scale;
+  const 出た = Number(String(ctx.font).replace('px sans-serif', ''));
+  assert.ok(出た > 0, `font が設定されていない: ${JSON.stringify(ctx.font)}`);
+  // 文字枠は、大文字の高さより必ず大きい（そのまま渡していたら同じ値になる）
+  assert.ok(
+    出た > 大文字px * 1.15,
+    `文字枠の大きさをそのまま渡している（大文字 ${大文字px} に対して ${出た}）`
+  );
+  // 割り戻すと、大文字の高さが指定どおりになること
+  assert.ok(
+    Math.abs(出た * CAP_HEIGHT_RATIO - 大文字px) < 1e-9,
+    `大文字の高さが ${出た * CAP_HEIGHT_RATIO} になっており、指定の ${大文字px} と合わない`
+  );
+});
+
+test('読めない大きさかどうかは、大文字の高さで決める（文字枠の大きさで決めない）', () => {
+  // 【境目でしか分からない】読めるかどうかの目安は5px。
+  // 大文字の高さ4pxの文字は読めないので描かない。
+  // ところが文字枠の大きさで判断すると 4 ÷ 0.72 ＝ 5.6px となり、
+  // **読めない文字まで描いてしまう。** 画面が黒くつぶれるもとになる。
+  //
+  // ふつうの大きさの文字で試すと、どちらで判断しても同じ結果になり、
+  // 取り違えを見逃す（開発ルール47.6と同じ「見分けのつく見本を選ぶ」話）。
+  const vp = createViewport(1000, 600);
+  fitToBounds(vp, { minX: 0, minY: 0, maxX: 100, maxY: 60 });
+
+  const 文字 = (大文字px) => ({
+    ...SAMPLE,
+    entities: [{
+      type: 'text', layer: '0', color: '#000',
+      x: 50, y: 30, height: 大文字px / vp.scale, rotation: 0, text: 'あ',
+    }],
+  });
+
+  assert.equal(
+    renderDrawing(makeFakeCtx(1000, 600), 文字(4), vp, {}).drawn, 0,
+    '大文字の高さ4pxは読めないのに描いている（文字枠の大きさで判断していないか）'
+  );
+  assert.equal(
+    renderDrawing(makeFakeCtx(1000, 600), 文字(6), vp, {}).drawn, 1,
+    '大文字の高さ6pxは読めるのに描いていない'
+  );
 });
 
 test('楕円が描かれる', () => {
