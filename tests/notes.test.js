@@ -16,16 +16,16 @@ import { fileURLToPath } from 'node:url';
 import {
   NOTE_LAYER,
   NOTE_COLORS,
-  NOTE_SIZES,
+  MIN_NOTE_HEIGHT,
+  MAX_NOTE_HEIGHT,
   ROTATION_STEP,
   LINE_GAP,
   MAX_NOTE_LINES,
   MAX_LINE_LENGTH,
   DEFAULT_COLOR_KEY,
-  DEFAULT_SIZE_KEY,
   colorCssFor,
-  sizePxFor,
-  noteHeightFor,
+  parseNoteHeight,
+  defaultNoteHeight,
   createNote,
   normalizeNoteText,
   normalizeRotation,
@@ -212,28 +212,69 @@ test('知らない色を渡されても落ちない（決めた色にする）',
 // 大きさ（ユーザーの条件）
 // ============================================================
 
-test('大きさは3段階から選べる', () => {
-  assert.deepEqual(NOTE_SIZES.map((s) => s.key), ['小', '中', '大']);
-  assert.ok(sizePxFor('小') < sizePxFor('中'), '小が中より大きい');
-  assert.ok(sizePxFor('中') < sizePxFor('大'), '中が大より大きい');
+test('大きさは、図面のミリの数字で入れられる', () => {
+  // ユーザーの指示（2026-09-08）：「大中小ではなくポイントで変えられればいい」。
+  // 図面にもとからある寸法文字と同じものさし（ミリ）で揃えられるようにした。
+  assert.equal(parseNoteHeight('3.5'), 3.5);
+  assert.equal(parseNoteHeight(35), 35);
+  assert.equal(parseNoteHeight('100'), 100);
 });
 
-test('大きさは、置いたときに見えている大きさで決まる', () => {
-  // 図面の単位で決め打ちすると、図面の縮尺しだいで極端な大きさになる（43.2）
-  assert.equal(noteHeightFor('中', 1), sizePxFor('中'));
-  assert.equal(noteHeightFor('中', 2), sizePxFor('中') / 2);
-  assert.equal(noteHeightFor('大', 0.5), sizePxFor('大') * 2);
+test('全角の数字で入れても読める', () => {
+  // 【iPadの日本語キーボードでは、全角で入ってしまうことがある】
+  // そこで弾くと、なぜ入らないのか分からない。半角に直してから読む。
+  assert.equal(parseNoteHeight('３．５'), 3.5);
+  assert.equal(parseNoteHeight('１００'), 100);
+  assert.equal(parseNoteHeight(' 35 '), 35, '前後の空白で読めなくなっている');
+});
+
+test('数字でないもの・0以下は受け付けない', () => {
+  // 0や負の高さの文字は描けない。黙って別の値にすると、入れた数と違うものが出る
+  assert.equal(parseNoteHeight('あ'), null);
+  assert.equal(parseNoteHeight(''), null);
+  assert.equal(parseNoteHeight('   '), null);
+  assert.equal(parseNoteHeight('0'), null);
+  assert.equal(parseNoteHeight('-5'), null);
+  assert.equal(parseNoteHeight(null), null);
+  assert.equal(parseNoteHeight(undefined), null);
+  assert.equal(parseNoteHeight(Infinity), null);
+});
+
+test('けた違いの大きさは受け付けない', () => {
+  // 小さすぎると消え、大きすぎると画面を埋め尽くす
+  assert.equal(parseNoteHeight(MIN_NOTE_HEIGHT / 2), null);
+  assert.equal(parseNoteHeight(MAX_NOTE_HEIGHT * 2), null);
+  assert.equal(parseNoteHeight(MIN_NOTE_HEIGHT), MIN_NOTE_HEIGHT, '下限そのものは使える');
+  assert.equal(parseNoteHeight(MAX_NOTE_HEIGHT), MAX_NOTE_HEIGHT, '上限そのものは使える');
+});
+
+test('最初に出す大きさは、今の拡大率から決める', () => {
+  // 図面の縮尺はまちまち。決め打ちの数を出すと、点のように小さいか
+  // 画面を埋め尽くすかのどちらかになる（49章）。
+  // 拡大率が小さい（引いて見ている）ほど、図面の上では大きい文字になる。
+  assert.ok(defaultNoteHeight(0.1) > defaultNoteHeight(1));
+  assert.ok(defaultNoteHeight(1) > defaultNoteHeight(10));
+});
+
+test('最初に出す大きさは、読みやすい数になる', () => {
+  // 「37.42184…」と出されても、直そうという気にならない。上から2けたで丸める
+  for (const scale of [0.037, 0.53, 1, 7.3, 123]) {
+    const v = defaultNoteHeight(scale);
+    assert.ok(v > 0, `${scale} で大きさが0になった`);
+    assert.equal(
+      String(v).replace(/[-.]/g, '').replace(/^0+/, '').replace(/0+$/, '').length <= 2,
+      true,
+      `拡大率 ${scale} で「${v}」という読みにくい数が出た`
+    );
+  }
 });
 
 test('拡大率がおかしくても、大きさは0にならない', () => {
-  // 0や負の高さの文字は描けない。図面が開いた直後は拡大率が決まっていないことがある
-  assert.ok(noteHeightFor('中', 0) > 0);
-  assert.ok(noteHeightFor('中', NaN) > 0);
-  assert.ok(noteHeightFor('中', -3) > 0);
-});
-
-test('知らない大きさを渡されても落ちない', () => {
-  assert.equal(sizePxFor('特大'), sizePxFor(DEFAULT_SIZE_KEY));
+  // 図面が開いた直後は拡大率が決まっていないことがある
+  assert.ok(defaultNoteHeight(0) > 0);
+  assert.ok(defaultNoteHeight(NaN) > 0);
+  assert.ok(defaultNoteHeight(-3) > 0);
+  assert.ok(defaultNoteHeight(undefined) > 0);
 });
 
 test('大きさを触っていなければ、書き直しても大きさが変わらない', () => {
@@ -301,12 +342,12 @@ test('足す・動かす・書き直す・消すが、ひととおりできる',
 test('色・大きさ・向きも、あとから直せる', () => {
   const d = 空の図面();
   const n = addNote(d, createNote({ x: 0, y: 0, text: 'あ', height: 5 }));
-  editNote(d, n.id, { colorKey: '青', sizeKey: '大', height: 9, rotation: 30 });
+  editNote(d, n.id, { colorKey: '青', height: 9, rotation: 30 });
   const e = 図形(d)[0];
   assert.equal(e.color, colorCssFor('青'));
   assert.equal(e.height, 9);
   assert.equal(e.rotation, 30);
-  assert.equal(findNote(d, n.id).sizeKey, '大');
+  assert.equal(findNote(d, n.id).height, 9, '大きさが本体に入っていない');
 });
 
 test('空にして決定したら、その注記は消える', () => {
@@ -371,7 +412,7 @@ test('覚える形に直して、また戻せる', () => {
   const n = listNotes(別の図面)[0];
   assert.equal(n.text, '既設\n2行目', '改行が失われている');
   assert.equal(n.colorKey, '青', '色が失われている');
-  assert.equal(n.sizeKey, '大', '大きさが失われている');
+  assert.equal(n.height, 5, '大きさが失われている');
   assert.equal(n.rotation, 45, '向きが失われている');
   assert.deepEqual([n.x, n.y], [10, 20]);
   assert.equal(図形(別の図面).length, 2, '戻したのに図形ができていない');
@@ -392,7 +433,7 @@ test('覚えるのは、必要な値だけ', () => {
   addNote(d, createNote({ x: 1, y: 2, text: 'あ', height: 3 }));
   assert.deepEqual(
     Object.keys(notesToStore(d)[0]).sort(),
-    ['colorKey', 'height', 'id', 'rotation', 'sizeKey', 'text', 'x', 'y']
+    ['colorKey', 'height', 'id', 'rotation', 'text', 'x', 'y']
   );
 });
 
@@ -416,7 +457,7 @@ test('古い記録（色や向きが無いもの）も、そのまま開ける',
   assert.equal(restoreNotes(d, [{ id: 'x', x: 1, y: 2, text: '古い', height: 3 }]), 1);
   const n = listNotes(d)[0];
   assert.equal(n.colorKey, DEFAULT_COLOR_KEY);
-  assert.equal(n.sizeKey, DEFAULT_SIZE_KEY);
+  assert.equal(n.height, 3, '覚えてあった大きさが変わっている');
   assert.equal(n.rotation, 0);
 });
 
@@ -713,4 +754,71 @@ test('キーボードが出ても、窓の中をスクロールして「決定�
   const body = css.slice(i, css.indexOf('}', i));
   assert.match(body, /max-height:/, '窓の高さに上限が無い');
   assert.match(body, /overflow-y:\s*auto/, '窓の中をスクロールできない');
+});
+
+// ============================================================
+// 大きさを数字で入れる画面（開発ルール49章）
+//
+// ユーザーの指示（2026-09-08）:「大中小ではなくポイントで変えれればいい」
+// 「作ったのにどこからも呼ばれていない」が過去に3件あった（7.3）ので、
+// つながっているところまで確かめる。
+// ============================================================
+
+test('大きさは、3段階のボタンではなく数字の欄になっている', () => {
+  const ui = read('src/ui/note-ui.js');
+  assert.match(ui, /class="nt-size-input"/, '大きさの数字を入れる欄が無い');
+  assert.doesNotMatch(ui, /nt-size"[^>]*data-size/, '3段階のボタンが残っている');
+  assert.doesNotMatch(ui, /NOTE_SIZES/, '3段階の決まりがまだ使われている');
+});
+
+test('大きさの欄は、iPadで数字のキーボードが出る', () => {
+  // 図面の上で文字の大きさを入れるのに、かなキーボードが出ると手間がかかる
+  const ui = read('src/ui/note-ui.js');
+  const i = ui.indexOf('class="nt-size-input"');
+  const 前後 = ui.slice(i - 120, i + 200);
+  assert.match(前後, /inputmode="decimal"/, '数字のキーボードが出ない');
+});
+
+test('大きさの欄も16px以上（iPadが画面ごと拡大しないように）', () => {
+  const css = read('src/ui/note-ui.css');
+  const i = css.indexOf('.nt-size-input {');
+  assert.ok(i >= 0, '大きさの欄の見た目が書かれていない');
+  const body = css.slice(i, css.indexOf('}', i));
+  const m = body.match(/font-size:\s*(\d+)px/);
+  assert.ok(m, '大きさの欄の文字の大きさが書いていない');
+  assert.ok(Number(m[1]) >= 16, `大きさの欄が ${m[1]}px。iPadが画面ごと拡大してしまう`);
+});
+
+test('入れた数字が、そのまま図面の上の大きさとして渡される', () => {
+  // 【つながっているか】窓が集めた値を、app.js が createNote の height に渡すこと。
+  // ここが切れていると、画面では選べるのに大きさが変わらない。
+  const ui = read('src/ui/note-ui.js');
+  assert.match(ui, /const 入れた高さ = parseNoteHeight\(大きさ欄\.value\)/,
+    '入力欄の値を読んでいない');
+  assert.match(ui, /height:\s*選んだ高さ/, '集めた大きさを渡していない');
+
+  const app = read('src/ui/app.js');
+  assert.match(app, /height:\s*選び\.height/, 'app.js が受け取った大きさを使っていない');
+  assert.doesNotMatch(app, /noteHeightFor/, '3段階の計算がまだ残っている');
+});
+
+test('おかしい数字のまま決定させない', () => {
+  // 黙って前の大きさで置くと、入れたはずの数と違うものが出て理由が分からない
+  const ui = read('src/ui/note-ui.js');
+  const i = ui.indexOf('const 入れた高さ = parseNoteHeight(大きさ欄.value)');
+  assert.ok(i >= 0);
+  const 後ろ = ui.slice(i, i + 400);
+  assert.match(後ろ, /if \(入れた高さ === null\)/, 'おかしい数字を見ていない');
+  assert.match(後ろ, /return;/, 'おかしくても窓を閉じてしまっている');
+});
+
+test('最初に出す大きさは、app.js が今の拡大率から渡す', () => {
+  // 図面の縮尺はまちまち。決め打ちだと点のように小さいか、画面を埋め尽くす
+  const app = read('src/ui/app.js');
+  assert.match(app, /defaultHeight:\s*\(\)\s*=>/, 'app.js が最初の値を渡していない');
+  assert.match(app, /defaultNoteHeight\(vp \? vp\.scale : 1\)/, '拡大率から出していない');
+
+  const ui = read('src/ui/note-ui.js');
+  assert.match(ui, /handlers\.defaultHeight && handlers\.defaultHeight\(\)/,
+    '窓が最初の値を受け取っていない');
 });

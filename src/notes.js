@@ -49,16 +49,24 @@ export const NOTE_COLORS = [
 export const DEFAULT_COLOR_KEY = '赤';
 
 /**
- * 選べる大きさ（開発ルール44.2）。
- * 数字は「置いたときに画面で何ピクセルに見えるか」。図面の単位ではない（43.2）。
+ * 文字の大きさは「図面のミリ」で持つ（開発ルール49章。2026-09-08 ユーザーの指示）。
+ *
+ * もとは「小・中・大」の3段階で、画面で何ピクセルに見えるかで決めていた（43.2）。
+ * ユーザーから「大中小ではなく数字で指定したい」と言われ、**図面のミリ**に変えた。
+ *
+ * 【なぜ画面のピクセルではなく、図面のミリにしたか（ユーザーが選んだ）】
+ *   図面にもとからある寸法文字と**同じものさしで揃えられる**。
+ *   実物の図面では、寸法文字が 35 や 100 というミリの値で書かれていた。
+ *   拡大縮小しても大きさが変わらないので、あとから見ても迷わない。
+ *
+ * 【下限・上限を置く理由】
+ *   0や負の数、けた違いの数を入れられると、文字が消えたり画面を埋め尽くしたりする。
  */
-export const NOTE_SIZES = [
-  { key: '小', px: 14 },
-  { key: '中', px: 20 },
-  { key: '大', px: 30 },
-];
+export const MIN_NOTE_HEIGHT = 0.01;
+export const MAX_NOTE_HEIGHT = 100000;
 
-export const DEFAULT_SIZE_KEY = '中';
+/** 大きさを決めていないとき、画面でこれくらいに見える値を最初に出す。 */
+const DEFAULT_NOTE_PX = 20;
 
 /** 向きを変えるきざみ（度）。ユーザーの指示で15度。 */
 export const ROTATION_STEP = 15;
@@ -84,22 +92,59 @@ export function colorCssFor(key) {
   return (found || NOTE_COLORS[0]).css;
 }
 
-/** 大きさの名前から、画面で何ピクセルかを引く。知らない名前なら中にする。 */
-export function sizePxFor(key) {
-  const found = NOTE_SIZES.find((s) => s.key === key);
-  return (found || NOTE_SIZES.find((s) => s.key === DEFAULT_SIZE_KEY)).px;
+/**
+ * 入れられた大きさ（図面のミリ）を確かめる。
+ *
+ * 【全角の数字も受ける】iPadの日本語キーボードでは、うっかり「３．５」と
+ * 全角で入ってしまうことがある。そこで弾くと、**なぜ入らないのか分からない。**
+ * 半角に直してから読む。
+ *
+ * @param {string|number} value
+ * @returns {number|null} 使える大きさ。数でない・範囲の外なら null
+ */
+export function parseNoteHeight(value) {
+  if (value === null || value === undefined) return null;
+  const 半角 = String(value)
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/[．。]/g, '.')
+    .replace(/[，,\s]/g, '')
+    .trim();
+  if (半角 === '') return null;
+  const v = Number(半角);
+  if (!Number.isFinite(v)) return null;
+  // 0以下も、けた違いも、下限と上限の1か所でまとめて弾く。
+  // 同じことを2か所で判定すると、片方を直したときにもう片方が取り残される。
+  if (v < MIN_NOTE_HEIGHT || v > MAX_NOTE_HEIGHT) return null;
+  return v;
 }
 
 /**
- * 選んだ大きさを、図面の単位での文字の高さに直す（開発ルール43.2）。
+ * 大きさをまだ決めていないときに、最初に出す値（図面のミリ）。
  *
- * 図面の単位（ミリ）で決め打ちすると、図面の縮尺しだいで
- * 極端に大きくなったり、点のように小さくなったりする。
- * 「置いたときに見えている大きさ」で決めれば、置いた本人の感覚と合う。
+ * 図面の縮尺はまちまちなので、決め打ちの数を出すと
+ * **点のように小さい**か**画面を埋め尽くす**かのどちらかになる。
+ * 今見えている拡大率から「画面で20pxに見える大きさ」を求めて出す。
+ * そのあとはユーザーが数字を直せばよい。
  */
-export function noteHeightFor(sizeKey, scale) {
+export function defaultNoteHeight(scale) {
   const s = Number.isFinite(scale) && scale > 0 ? scale : 1;
-  return sizePxFor(sizeKey) / s;
+  return 読みやすい数にする(DEFAULT_NOTE_PX / s);
+}
+
+/**
+ * 上から2けたで丸めて、読みやすい数にする（37.4218… → 37、0.0432… → 0.043）。
+ * 最初に出す数が「37.42184…」では、直そうという気にならない。
+ */
+function 読みやすい数にする(v) {
+  if (!(v > 0)) return 1;
+  const けた = Math.floor(Math.log10(v));
+  const きざみ = Math.pow(10, けた - 1);
+  const 丸め = Math.round(v / きざみ) * きざみ;
+  // 掛け算・割り算で出る小数のごみを落とす（0.30000000000000004 のような値）
+  const 出す = Number(丸め.toPrecision(6));
+  if (出す < MIN_NOTE_HEIGHT) return MIN_NOTE_HEIGHT;
+  if (出す > MAX_NOTE_HEIGHT) return MAX_NOTE_HEIGHT;
+  return 出す;
 }
 
 /**
@@ -140,7 +185,7 @@ export function normalizeRotation(deg) {
  * 注記を1つ作る（図形ではなく、注記そのもの）。
  * @returns {object|null} 文字が空なら null
  */
-export function createNote({ x, y, text, height, rotation, colorKey, sizeKey, id } = {}) {
+export function createNote({ x, y, text, height, rotation, colorKey, id } = {}) {
   const 文字 = normalizeNoteText(text);
   if (!文字) return null;
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
@@ -153,7 +198,6 @@ export function createNote({ x, y, text, height, rotation, colorKey, sizeKey, id
     height: Number.isFinite(height) && height > 0 ? height : 1,
     rotation: normalizeRotation(rotation),
     colorKey: NOTE_COLORS.some((c) => c.key === colorKey) ? colorKey : DEFAULT_COLOR_KEY,
-    sizeKey: NOTE_SIZES.some((s) => s.key === sizeKey) ? sizeKey : DEFAULT_SIZE_KEY,
   };
 }
 
@@ -265,7 +309,7 @@ export function moveNote(drawing, noteId, x, y) {
  *
  * 文字を空にしたときは**消す**（空の文字を残しても読めないため）。
  *
- * @param {object} 変更 { text, colorKey, sizeKey, height, rotation } のうち、変えたいものだけ
+ * @param {object} 変更 { text, colorKey, height, rotation } のうち、変えたいものだけ
  * @returns {'書き直した'|'消した'|'見つからない'}
  */
 export function editNote(drawing, noteId, 変更 = {}) {
@@ -282,9 +326,6 @@ export function editNote(drawing, noteId, 変更 = {}) {
   }
   if (変更.colorKey !== undefined && NOTE_COLORS.some((c) => c.key === 変更.colorKey)) {
     n.colorKey = 変更.colorKey;
-  }
-  if (変更.sizeKey !== undefined && NOTE_SIZES.some((s) => s.key === 変更.sizeKey)) {
-    n.sizeKey = 変更.sizeKey;
   }
   // 大きさを変えたときだけ、図面の単位での高さを計算し直す。
   // 変えていないのに計算し直すと、**書き直しただけで大きさが変わる**
@@ -327,7 +368,6 @@ export function notesToStore(drawing) {
     text: n.text,
     rotation: n.rotation,
     colorKey: n.colorKey,
-    sizeKey: n.sizeKey,
   }));
 }
 

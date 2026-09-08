@@ -319,3 +319,37 @@
     display: none !important;
   }
 }
+
+/* 大きさを数字で入れる欄（開発ルール49章）。
+ * 「小・中・大」の3つのボタンから、図面のミリを直接入れる形に変えた。 */
+.nt-size-input {
+  width: 6em;
+  min-height: 44px; /* 指で押せる大きさ（11章） */
+  padding: 0 10px;
+  border: 2px solid #cccccc;
+  border-radius: 10px;
+  background: #ffffff;
+  font-family: inherit;
+  /* 【16px未満にしない（43.5）】iPadは小さい文字の入力欄に触れると
+   * 画面ごと勝手に拡大する。そうなると図面の位置が分からなくなる。 */
+  font-size: 17px;
+  font-weight: 700;
+  color: #111111;
+  text-align: right;
+}
+
+.nt-unit {
+  font-size: 12px;
+  color: #666666;
+}
+
+/* 数字がおかしいときの注意。決定を押す前に、その場で出す */
+.nt-size-warn {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #fdecec;
+  color: #a11414;
+  font-size: 13px;
+  font-weight: 700;
+}

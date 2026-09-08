@@ -38,7 +38,7 @@ import {
   notesToStore,
   restoreNotes,
   findNoteAt,
-  noteHeightFor,
+  defaultNoteHeight,
   colorCssFor,
 } from '../notes.js';
 import { findSnapPoint, SNAP_RADIUS_PX } from '../measure.js';
@@ -765,19 +765,27 @@ const noteUi = createNoteUi(canvas, {
   // 取っ手の色を、その注記の色に合わせる（どれがどれか見て分かるように）
   colorOf: (note) => colorCssFor(note.colorKey),
 
+  // 【最初に出す大きさ（開発ルール49章）】
+  // 図面の縮尺はまちまちなので、決め打ちの数を出すと点のように小さいか、
+  // 画面を埋め尽くすかのどちらかになる。今の拡大率から出す。
+  defaultHeight: () => {
+    const vp = ensureViewport();
+    return defaultNoteHeight(vp ? vp.scale : 1);
+  },
+
   onCreate: (x, y, 選び) => {
     const vp = ensureViewport();
     if (!vp || !currentDrawing) return;
-    // 【置いたときに見えている大きさで作る（43.2）】
-    // 図面の単位で決め打ちすると、図面の縮尺しだいで極端な大きさになる。
+    // 【大きさは図面のミリで受け取る（開発ルール49章）】
+    // ユーザーが窓に入れた数字が、そのまま図面の上での文字の高さになる。
+    // 図面にもとからある寸法文字と、同じものさしで揃えられる。
     const note = createNote({
       x,
       y,
       text: 選び.text,
       colorKey: 選び.colorKey,
-      sizeKey: 選び.sizeKey,
       rotation: 選び.rotation,
-      height: noteHeightFor(選び.sizeKey, vp.scale),
+      height: 選び.height,
     });
     if (!note) return;
     addNote(currentDrawing, note);
@@ -800,12 +808,10 @@ const noteUi = createNoteUi(canvas, {
       colorKey: 選び.colorKey,
       rotation: 選び.rotation,
     };
-    // 【大きさは、触ったときだけ計算し直す（開発ルール44.2）】
-    // 触っていないのに計算し直すと、**文字を直しただけで大きさが変わる。**
-    // 置いたときと今とで、拡大率が違うためである。
-    if (選び.sizeChanged && vp) {
-      変更.sizeKey = 選び.sizeKey;
-      変更.height = noteHeightFor(選び.sizeKey, vp.scale);
+    // 【大きさは、触ったときだけ変える（開発ルール44.2）】
+    // 触っていないのに入れ直すと、文字を直しただけで大きさが変わりかねない。
+    if (選び.sizeChanged) {
+      変更.height = 選び.height;
     }
     // 空にして決定したときは消える（notes.js の決まり）
     if (editNote(currentDrawing, noteId, 変更) === '見つからない') return;

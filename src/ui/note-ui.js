@@ -16,14 +16,15 @@
 
 import {
   NOTE_COLORS,
-  NOTE_SIZES,
   ROTATION_STEP,
   MAX_NOTE_LINES,
   MAX_LINE_LENGTH,
   DEFAULT_COLOR_KEY,
-  DEFAULT_SIZE_KEY,
+  MIN_NOTE_HEIGHT,
+  MAX_NOTE_HEIGHT,
   normalizeNoteText,
   normalizeRotation,
+  parseNoteHeight,
 } from '../notes.js';
 
 /**
@@ -39,7 +40,8 @@ import {
  *   onDelete(noteId)         … 消した
  *   onExit()                 … 「終わる」で抜けた
  *
- *   中身 = { text, colorKey, sizeKey, rotation, sizeChanged }
+ *   中身 = { text, colorKey, height, rotation, sizeChanged }
+ *   defaultHeight()  … 大きさをまだ決めていないときの初期値（図面のミリ）
  */
 export function createNoteUi(canvasEl, handlers = {}) {
   let active = false;
@@ -61,10 +63,16 @@ export function createNoteUi(canvasEl, handlers = {}) {
   let 編集中 = null;
   /** 窓で選んでいる中身 */
   let 選んだ色 = DEFAULT_COLOR_KEY;
-  let 選んだ大きさ = DEFAULT_SIZE_KEY;
+  /**
+   * 選んでいる大きさ（図面のミリ）。まだ一度も決めていなければ null（49章）。
+   * 続けて書くときは前の値を引き継ぐので、毎回入れ直さなくてよい。
+   */
+  let 選んだ高さ = null;
   let 選んだ向き = 0;
   /** 大きさを触ったか。触っていなければ、書き直しても大きさを変えない（44.2） */
   let 大きさを触った = false;
+  let 大きさ欄 = null;
+  let 大きさの注意 = null;
 
   function 色の選び(c) {
     return (
@@ -73,9 +81,6 @@ export function createNoteUi(canvasEl, handlers = {}) {
     );
   }
 
-  function 大きさの選び(z) {
-    return `<button type="button" class="nt-chip nt-size" data-size="${z.key}">${z.key}</button>`;
-  }
 
   function build() {
     root = document.createElement('div');
@@ -100,8 +105,13 @@ export function createNoteUi(canvasEl, handlers = {}) {
 
           <div class="nt-row">
             <span class="nt-row-label">大きさ</span>
-            <div class="nt-choices">${NOTE_SIZES.map(大きさの選び).join('')}</div>
+            <div class="nt-choices">
+              <input type="text" class="nt-size-input" inputmode="decimal"
+                     autocomplete="off" aria-label="文字の大きさ（図面のミリ）">
+              <span class="nt-unit">ミリ（図面の寸法と同じものさし）</span>
+            </div>
           </div>
+          <p class="nt-size-warn" hidden></p>
 
           <div class="nt-row">
             <span class="nt-row-label">向き</span>
@@ -130,6 +140,8 @@ export function createNoteUi(canvasEl, handlers = {}) {
     窓の見出し = root.querySelector('.nt-dialog-title');
     消すボタン = root.querySelector('.nt-delete');
     向きの表示 = root.querySelector('.nt-rot-now');
+    大きさ欄 = root.querySelector('.nt-size-input');
+    大きさの注意 = root.querySelector('.nt-size-warn');
 
     終わる.addEventListener('click', () => stop());
     root.querySelector('.nt-ok').addEventListener('click', 決定);
@@ -142,13 +154,10 @@ export function createNoteUi(canvasEl, handlers = {}) {
         選び直しを見せる();
       });
     }
-    for (const b of root.querySelectorAll('.nt-size')) {
-      b.addEventListener('click', () => {
-        選んだ大きさ = b.dataset.size;
-        大きさを触った = true;
-        選び直しを見せる();
-      });
-    }
+    大きさ欄.addEventListener('input', () => {
+      大きさを触った = true;
+      大きさの注意を出す();
+    });
     root.querySelector('.nt-rot-left').addEventListener('click', () => {
       選んだ向き = normalizeRotation(選んだ向き + ROTATION_STEP);
       選び直しを見せる();
@@ -295,10 +304,31 @@ export function createNoteUi(canvasEl, handlers = {}) {
     for (const b of root.querySelectorAll('.nt-color')) {
       b.classList.toggle('nt-chip-on', b.dataset.color === 選んだ色);
     }
-    for (const b of root.querySelectorAll('.nt-size')) {
-      b.classList.toggle('nt-chip-on', b.dataset.size === 選んだ大きさ);
-    }
     向きの表示.textContent = `${選んだ向き}°`;
+    大きさの注意を出す();
+  }
+
+  /**
+   * 大きさの数字がおかしいときに、その場で知らせる（49章）。
+   *
+   * 黙って別の値に直してしまうと、**入れたはずの大きさと違うものが出て**
+   * なぜそうなったのか分からない。決定を押す前に理由を出す。
+   */
+  function 大きさの注意を出す() {
+    if (!大きさ欄 || !大きさの注意) return;
+    const 生 = 大きさ欄.value;
+    if (String(生).trim() === '') {
+      大きさの注意.hidden = true;
+      return;
+    }
+    const 高さ = parseNoteHeight(生);
+    if (高さ === null) {
+      大きさの注意.textContent =
+        `大きさは ${MIN_NOTE_HEIGHT} 〜 ${MAX_NOTE_HEIGHT} ミリの数字で入れてください`;
+      大きさの注意.hidden = false;
+      return;
+    }
+    大きさの注意.hidden = true;
   }
 
   function 窓を開く(中身) {
@@ -312,9 +342,14 @@ export function createNoteUi(canvasEl, handlers = {}) {
     // （同じ色・同じ大きさで続けて書くことが多いため）
     if (書き直し) {
       選んだ色 = 中身.colorKey || DEFAULT_COLOR_KEY;
-      選んだ大きさ = 中身.sizeKey || DEFAULT_SIZE_KEY;
+      選んだ高さ = parseNoteHeight(中身.height);
       選んだ向き = normalizeRotation(中身.rotation);
+    } else if (選んだ高さ === null) {
+      // まだ一度も決めていないときだけ、今の拡大率から出した値を入れておく（49章）。
+      // 2つめからは前の値を引き継ぐので、続けて書くときに入れ直さなくてよい。
+      選んだ高さ = (handlers.defaultHeight && handlers.defaultHeight()) || 1;
     }
+    大きさ欄.value = 選んだ高さ === null ? '' : String(選んだ高さ);
     大きさを触った = false;
     選び直しを見せる();
 
@@ -340,10 +375,25 @@ export function createNoteUi(canvasEl, handlers = {}) {
     if (!編集中) return;
     const 文字 = normalizeNoteText(入力欄.value);
     const いま = 編集中;
+    // 【おかしい数字のまま決定させない（49章）】
+    // 黙って前の大きさで置くと、入れたはずの数と違うものが出て、理由が分からない。
+    const 入れた高さ = parseNoteHeight(大きさ欄.value);
+    if (入れた高さ === null) {
+      大きさの注意を出す();
+      try {
+        大きさ欄.focus();
+        大きさ欄.select();
+      } catch (e) {
+        // 焦点が当たらなくても、注意書きは出ている
+      }
+      return; // 窓は閉じない。直してもらう
+    }
+    選んだ高さ = 入れた高さ;
+
     const 選び = {
       text: 文字,
       colorKey: 選んだ色,
-      sizeKey: 選んだ大きさ,
+      height: 選んだ高さ,
       rotation: 選んだ向き,
       sizeChanged: 大きさを触った,
     };
@@ -373,7 +423,7 @@ export function createNoteUi(canvasEl, handlers = {}) {
       noteId: note.id,
       text: note.text,
       colorKey: note.colorKey,
-      sizeKey: note.sizeKey,
+      height: note.height,
       rotation: note.rotation,
     });
   }
