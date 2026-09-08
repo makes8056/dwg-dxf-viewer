@@ -1257,7 +1257,10 @@ function convertSpline(rec, drawing, ctx, layerColorMap) {
  *            rotation:number|null, lines:Array, doglegs:Array}}
  */
 function parseMLeaderGroups(g) {
-  const out = { text: '', textX: 0, textY: 0, height: 0, rotation: null, lines: [], doglegs: [] };
+  const out = {
+    text: '', textX: 0, textY: 0, height: 0, rotation: null,
+    arrowSize: 0, lines: [], doglegs: [],
+  };
   const 入れ子 = [];
   const いまどこ = () => (入れ子.length ? 入れ子[入れ子.length - 1] : '');
 
@@ -1266,7 +1269,25 @@ function parseMLeaderGroups(g) {
   let 引出 = null; // 作りかけの LEADER（終わりの点と、折れ曲がりの向き）
 
   const 線をしまう = () => {
-    if (線 && 線.length >= 2) out.lines.push(線);
+    if (線) {
+      // 【実物の図面で分かったこと。ここを読まないと引出線が消えます】
+      //
+      // LEADER_LINE の中には、**矢印の先など「途中までの点」しか入っていない。**
+      // お客様の図面では、点が**1つだけ**だった（矢印の先端のみ）。
+      // 線の終わりの点は、ひとつ外側の LEADER がコード10で持っている。
+      //
+      // これをつながないと点が1つだけの線になり、**線として描けずに消える。**
+      // 折れ曲がりの短い線（ランディング）だけが残るので、画面では
+      // **文字の前にアンダーバーだけが出ている**ように見える。実際にそうなっていた。
+      const 終点 = 引出 && 引出.終点;
+      if (終点) {
+        const 前 = 線[線.length - 1];
+        if (!前 || Math.abs(前[0] - 終点[0]) > 1e-9 || Math.abs(前[1] - 終点[1]) > 1e-9) {
+          線.push([終点[0], 終点[1]]);
+        }
+      }
+      if (線.length >= 2) out.lines.push(線);
+    }
     線 = null;
     点 = null;
   };
@@ -1328,6 +1349,8 @@ function parseMLeaderGroups(g) {
       else if (code === 41) out.height = num(value);
       else if (code === 13) out.向きX = num(value);
       else if (code === 23) out.向きY = num(value);
+      // 140 は矢印の頭の大きさ。実物の図面では 25（文字の高さと同じ）だった
+      else if (code === 140) out.arrowSize = num(value);
     }
   }
 
@@ -1341,6 +1364,51 @@ function parseMLeaderGroups(g) {
     out.rotation = normalizeAngle((Math.atan2(out.向きY || 0, out.向きX || 0) * 180) / Math.PI);
   }
   return out;
+}
+
+/** 矢印の頭の開き（片側）。CADの「開いた矢印」に近い角度。 */
+const ARROW_HALF_ANGLE_DEG = 15;
+
+/**
+ * 引出線の先に、矢印の頭を「くの字」の2本の線で作る（開発ルール46章）。
+ *
+ * このアプリには塗りつぶす仕組みが無いので、黒い三角は作れない。
+ * だが**どちらを指しているのかが分からないと、注記として役に立たない。**
+ * 2本の線なら、いつもの道（line）だけで描ける。新しい種類は増やさない。
+ *
+ * 【向きの決め方】点の並びの**先頭が矢印の先**（DXFの決まり）。
+ * 先頭から2番目の点へ向かう向きに、左右へ15度ずつ開いた線を引く。
+ *
+ * @param {Array<Array<number>>} 点たち 引出線の頂点（先頭が矢印の先）
+ * @param {number} 大きさ 矢印の頭の長さ（コード140）
+ * @returns {Array<Array<number>>} [[x1,y1,x2,y2], ...]
+ */
+function 矢印の線(点たち, 大きさ) {
+  if (!Array.isArray(点たち) || 点たち.length < 2) return [];
+  if (!(大きさ > 0)) return [];
+
+  const [先, 次] = 点たち;
+  const dx = 次[0] - 先[0];
+  const dy = 次[1] - 先[1];
+  const 長さ = Math.hypot(dx, dy);
+  if (!(長さ > 0)) return [];
+
+  // 先端から、線をさかのぼる向き
+  const ux = dx / 長さ;
+  const uy = dy / 長さ;
+  const 出る = [];
+  for (const 符号 of [1, -1]) {
+    const a = (符号 * ARROW_HALF_ANGLE_DEG * Math.PI) / 180;
+    const cos = Math.cos(a);
+    const sin = Math.sin(a);
+    出る.push([
+      先[0],
+      先[1],
+      先[0] + (ux * cos - uy * sin) * 大きさ,
+      先[1] + (ux * sin + uy * cos) * 大きさ,
+    ]);
+  }
+  return 出る;
 }
 
 /**
@@ -1366,6 +1434,12 @@ function convertMLeader(rec, drawing, ctx, layerColorMap) {
   for (const 線 of m.lines) {
     emitPolyline(drawing, ctx, layer, color, 線.map(([x, y]) => [向きを直す(x), y]), false);
     描いた = true;
+    // 矢印の頭を「くの字」の2本の線で描く。
+    // 塗りつぶす仕組みが無いので黒い三角は作れないが、
+    // **どちらを指しているかが分からないと、注記として役に立たない。**
+    for (const [x1, y1, x2, y2] of 矢印の線(線, m.arrowSize)) {
+      emitLine(drawing, ctx, layer, color, 向きを直す(x1), y1, 向きを直す(x2), y2);
+    }
   }
   for (const [x1, y1, x2, y2] of m.doglegs) {
     emitLine(drawing, ctx, layer, color, 向きを直す(x1), y1, 向きを直す(x2), y2);
