@@ -1,14 +1,7 @@
 // toolbar.js — 画面のボタン類（開発ルール2.2：1ファイル1役割）
 //
-// このアプリで用意するボタンは、この7つだけ（むやみに増やさない）。
-//   図面を開く／図面を選ぶ／全体表示／長さを測る／文字を書く／白黒で表示／印刷する範囲
-//
-// 【「白黒で表示」を足した理由（v0.4.9／2026-09-10 ユーザーの指示）】
-//   お客様の図面では、配管が画層（レイヤ）ごと赤で描かれている。
-//   図面がそう指定しているのでアプリの間違いではないが、
-//   **白黒プリンターで刷ると赤は薄い灰色になって読みにくい。**
-//   そこで、押している間だけ図面を黒一色で出す切り替えを足した。
-//   押した状態は覚えておく（次に開いたときも同じ）。
+// このアプリで用意するボタンは、この6つだけ（むやみに増やさない）。
+//   図面を開く／図面を選ぶ／全体表示／長さを測る／印刷する範囲
 //
 // 【「拡大」「縮小」ボタンは外した（v0.2.4／ユーザー判断）】
 //   iPadでは2本指のつまむ操作（ピンチ）で拡大縮小できるので、ボタンは要らない。
@@ -52,12 +45,6 @@ const ICONS = {
             fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
       <line x1="14.2" y1="6.6" x2="17.4" y2="9.8" stroke="currentColor" stroke-width="1.7" />
     </svg>`,
-  // 白黒で表示：左半分だけ塗った丸（濃さの切り替えを表す、よくある絵）
-  mono: `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="1.8" />
-      <path d="M12 3.8a8.2 8.2 0 0 0 0 16.4z" fill="currentColor" />
-    </svg>`,
   // 印刷する範囲：プリンターの絵に、囲みを表す点線の四角を重ねる
   print: `
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -78,8 +65,6 @@ const BUTTONS = [
   { action: 'fit', icon: ICONS.fit, label: '全体表示' },
   { action: 'measure', icon: ICONS.measure, label: '長さを測る' },
   { action: 'note', icon: ICONS.note, label: '文字を書く' },
-  // 押すたびに入り切りが変わるボタン。今どちらなのかを aria-pressed で示す。
-  { action: 'mono', icon: ICONS.mono, label: '白黒で表示', toggle: true },
   // このアプリの一番の目的（開発ルール26章）。右端に置いて押し間違えを減らす。
   { action: 'print', icon: ICONS.print, label: '印刷する範囲' },
 ];
@@ -93,24 +78,16 @@ const BUTTONS = [
  *   onFit()     … 「全体表示」が押された
  *   onMeasure() … 「長さを測る」が押された
  *   onNote()    … 「文字を書く」が押された
- *   onMonochrome(白黒か) … 「白黒で表示」が押された。**押したあとの状態**を渡す
  *   onPrint()   … 「印刷する範囲」が押された（範囲を囲むモードに入る）
- * @param {object} [options] { monochrome } … 「白黒で表示」の最初の状態
  * @returns {() => void} 後片付け用。呼ぶとボタンの反応をやめる。
  */
-export function attachToolbar(container, handlers = {}, options = {}) {
+export function attachToolbar(container, handlers = {}) {
   container.innerHTML = BUTTONS.map((b) => `
-    <button type="button" class="tb-btn" data-action="${b.action}" aria-label="${b.label}"${
-      b.toggle ? ' aria-pressed="false"' : ''
-    }>
+    <button type="button" class="tb-btn" data-action="${b.action}" aria-label="${b.label}">
       <span class="tb-icon">${b.icon}</span>
       <span class="tb-label">${b.label}</span>
     </button>
   `).join('');
-
-  // 前に使ったときの状態を、そのままボタンに映す（覚えているのは呼び出す側）
-  const monoBtn = container.querySelector('[data-action="mono"]');
-  if (monoBtn) monoBtn.setAttribute('aria-pressed', options.monochrome ? 'true' : 'false');
 
   const onClick = (ev) => {
     const btn = ev.target.closest('.tb-btn');
@@ -121,12 +98,7 @@ export function attachToolbar(container, handlers = {}, options = {}) {
     else if (action === 'fit') handlers.onFit && handlers.onFit();
     else if (action === 'measure') handlers.onMeasure && handlers.onMeasure();
     else if (action === 'note') handlers.onNote && handlers.onNote();
-    else if (action === 'mono') {
-      // 押すたびに入り切りが変わる。見た目をここで先に変え、**変えたあとの値**を渡す。
-      const 今まで = btn.getAttribute('aria-pressed') === 'true';
-      btn.setAttribute('aria-pressed', 今まで ? 'false' : 'true');
-      handlers.onMonochrome && handlers.onMonochrome(!今まで);
-    } else if (action === 'print') handlers.onPrint && handlers.onPrint();
+    else if (action === 'print') handlers.onPrint && handlers.onPrint();
   };
 
   container.addEventListener('click', onClick);

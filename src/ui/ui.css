@@ -130,18 +130,6 @@ body {
   background: #dcebff;
 }
 
-/* 入り切りが変わるボタン（「白黒で表示」）が入っているとき。
- * 現場では手袋ごしに一目で分かる必要があるので、色だけでなく
- * **濃さも反転させて**はっきり違う見た目にする。 */
-.tb-btn[aria-pressed='true'] {
-  background: #1a1a1a;
-  color: #ffffff;
-}
-
-.tb-btn[aria-pressed='true'] .tb-icon {
-  color: #ffffff;
-}
-
 .tb-icon {
   display: flex;
   align-items: center;

@@ -30,7 +30,7 @@
 //                                       ごく少数なので、これで十分に軽い。
 
 import { computePrintPlacement, PRINT_LINE_WIDTH_MM, printableDrawing } from './print-area.js';
-import { CAP_HEIGHT_RATIO, entityColor } from './drawing.js';
+import { CAP_HEIGHT_RATIO } from './drawing.js';
 
 /** 1ミリは何ポイントか。PDFの長さの単位はポイント（1/72インチ）。 */
 export const PT_PER_MM = 72 / 25.4;
@@ -394,7 +394,7 @@ export function runLengthEncode(bytes) {
  *
  * @param {object} drawing src/drawing.js の形の図形データ
  * @param {object} area 図面座標での範囲 { minX, minY, maxX, maxY }
- * @param {object} [options] { createCanvas, monochrome } … createCanvas は漢字の型を作るのに使う。テストで差し替えられる
+ * @param {object} [options] { createCanvas } … 漢字の型を作るのに使う。テストで差し替えられる
  * @returns {{ bytes:Uint8Array, blob:Blob|null, orientation:string, drawn:number }|{ error:string }}
  */
 export function createPrintPdf(drawing, area, options = {}) {
@@ -427,14 +427,8 @@ export function createPrintPdf(drawing, area, options = {}) {
     );
     ops.push(`${n(PRINT_LINE_WIDTH_MM * PT_PER_MM)} w 1 J 1 j`);
 
-    // 白黒で印刷するか（開発ルール53章）。
-    // 何色にするかを決めるのは drawing.js の entityColor() だけ。
-    // 画面（render.js）とまったく同じ関数を通すので、**紙だけ色が違う**が起きない（36.2）
-    const 白黒 = options.monochrome === true;
-
     let いまの色 = null;
-    const 色を変える = (e, 塗り) => {
-      const css = entityColor(e, 白黒);
+    const 色を変える = (css, 塗り) => {
       const key = css + (塗り ? 'f' : 's');
       if (いまの色 === key) return;
       いまの色 = key;
@@ -453,13 +447,13 @@ export function createPrintPdf(drawing, area, options = {}) {
       if (!entityTouchesArea(e, 置き方.area, 判定の余裕)) continue;
 
       if (e.type === 'line') {
-        色を変える(e, false);
+        色を変える(e.color, false);
         ops.push(`${n(X(e.x1))} ${n(Y(e.y1))} m ${n(X(e.x2))} ${n(Y(e.y2))} l S`);
         drawn++;
       } else if (e.type === 'polyline') {
         const pts = Array.isArray(e.points) ? e.points : [];
         if (pts.length < 2) continue;
-        色を変える(e, false);
+        色を変える(e.color, false);
         let d = `${n(X(pts[0][0]))} ${n(Y(pts[0][1]))} m`;
         for (let i = 1; i < pts.length; i++) d += ` ${n(X(pts[i][0]))} ${n(Y(pts[i][1]))} l`;
         if (e.closed) d += ' h';
@@ -478,7 +472,7 @@ export function createPrintPdf(drawing, area, options = {}) {
           回る = ((((e.endAngle - e.startAngle) % 360) + 360) % 360) || 360;
         }
         const { start, curves } = ellipseToBezier(e.cx, e.cy, rx, ry, rotation, 始め, 回る);
-        色を変える(e, false);
+        色を変える(e.color, false);
         let d = `${n(X(start[0]))} ${n(Y(start[1]))} m`;
         for (const c of curves) {
           d += ` ${n(X(c[0]))} ${n(Y(c[1]))} ${n(X(c[2]))} ${n(Y(c[3]))} ${n(X(c[4]))} ${n(Y(c[5]))} c`;
@@ -487,7 +481,7 @@ export function createPrintPdf(drawing, area, options = {}) {
         drawn++;
       } else if (e.type === 'point') {
         // 小さな丸で塗る。大きさは線の太さに合わせる（画面と同じ考え方）
-        色を変える(e, true);
+        色を変える(e.color, true);
         const r = PRINT_LINE_WIDTH_MM * PT_PER_MM * 0.9;
         const { start, curves } = ellipseToBezier(X(e.x), Y(e.y), r, r, 0, 0, 360);
         let d = `${n(start[0])} ${n(start[1])} m`;
@@ -504,7 +498,7 @@ export function createPrintPdf(drawing, area, options = {}) {
         // 画面と同じ割り方をしないと、確認画面と紙で文字の大きさが食い違う（36.2）
         const 高さpt = ((e.height || 0) * S) / CAP_HEIGHT_RATIO;
         if (!(高さpt > 0)) continue;
-        色を変える(e, true);
+        色を変える(e.color, true);
         if (isWinAnsiText(文字)) {
           描く文字(ops, e, 文字, 高さpt, X, Y);
         } else {
