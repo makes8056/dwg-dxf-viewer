@@ -389,7 +389,7 @@ test('同じ値が続くところは、ちゃんと縮む', () => {
 
 test('紙に渡すのはPDF。作れなかったときだけ絵にする', () => {
   const app = read('src/ui/app.js');
-  assert.match(app, /createPrintPdf\(currentDrawing, area\)/, 'PDFを作っていない');
+  assert.match(app, /createPrintPdf\(currentDrawing, area[,)]/, 'PDFを作っていない');
   assert.match(app, /PDF.*\?\s*pdf\.blob\s*:\s*result\.blob/, 'PDFを優先していない');
   assert.match(app, /makePrintFileName\(.*'pdf'.*'png'.*\)/, 'ファイル名を切り替えていない');
 });
@@ -533,4 +533,52 @@ test('画面と紙で、文字の大きさの決め方が同じ（36.2）', () =
       `${名} が、割合を drawing.js から取っていない（別々に持つと食い違う）`
     );
   }
+});
+
+// ============================================================
+// 白黒で印刷する（開発ルール53章）
+//
+// 【画面と紙で食い違わせない（36.2）】
+// 色を決めるのは drawing.js の entityColor() だけ。画面（render.js）と
+// このPDFは同じ関数を通す。ここを別々に書くと「画面は黒いのに紙だけ赤い」が起きる。
+// ============================================================
+
+/** PDFの中で使われている「線の色」の命令（RG）を全部取り出す。 */
+function 線の色たち(bytes) {
+  const t = 文字にする(bytes);
+  return [...t.matchAll(/([\d.]+) ([\d.]+) ([\d.]+) RG/g)].map((m) => m.slice(1).join(' '));
+}
+
+test('白黒にしないときは、赤い線が赤のままPDFに入る', () => {
+  const area = { minX: 0, minY: 0, maxX: 100, maxY: 60 };
+  const r = createPrintPdf(四角い図面(0, 0, 100, 60), area, { createCanvas: makeFakeCanvas });
+  assert.ok(!r.error, r.error);
+  assert.ok(線の色たち(r.bytes).includes('1 0 0'), `赤が入っていない: ${線の色たち(r.bytes).join(' / ')}`);
+});
+
+test('白黒にすると、赤い線が黒でPDFに入る', () => {
+  const area = { minX: 0, minY: 0, maxX: 100, maxY: 60 };
+  const r = createPrintPdf(四角い図面(0, 0, 100, 60), area, {
+    createCanvas: makeFakeCanvas,
+    monochrome: true,
+  });
+  assert.ok(!r.error, r.error);
+  const 色 = 線の色たち(r.bytes);
+  assert.ok(色.length > 0, '線の色の指定が1つも無い');
+  assert.ok(!色.includes('1 0 0'), `赤が残っている: ${色.join(' / ')}`);
+  assert.ok(色.every((c) => c === '0 0 0'), `黒でない色がある: ${色.join(' / ')}`);
+});
+
+test('白黒で印刷しても、書き足した文字は選んだ色のまま', () => {
+  const area = { minX: 0, minY: 0, maxX: 100, maxY: 60 };
+  const 図面 = 四角い図面(0, 0, 100, 60);
+  図面.entities.push({
+    type: 'text', layer: '__書き足した文字__', color: '#c81e1e', isNote: true,
+    x: 10, y: 30, height: 8, rotation: 0, text: 'AB',
+  });
+  const r = createPrintPdf(図面, area, { createCanvas: makeFakeCanvas, monochrome: true });
+  assert.ok(!r.error, r.error);
+  // 文字は塗り（rg）で描く。注記の赤 #c81e1e は 200/30/30 → 0.784 0.118 0.118
+  const t = 文字にする(r.bytes);
+  assert.match(t, /0\.78\d* 0\.11\d* 0\.11\d* rg/, '書き足した文字まで黒くなっている');
 });

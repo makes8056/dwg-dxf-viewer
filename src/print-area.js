@@ -303,7 +303,7 @@ export function countNoPlot(drawing) {
  * 囲まれた範囲を、印刷用のキャンバスに描く。
  * @param {object} drawing src/drawing.js の形の図形データ
  * @param {object} area 図面座標での範囲 { minX, minY, maxX, maxY }
- * @param {object} [options] { createCanvas } … テスト用に差し替えられるようにする
+ * @param {object} [options] { createCanvas, monochrome } … createCanvas はテスト用に差し替えられるようにする
  * @returns {{ canvas:object, widthPx:number, heightPx:number,
  *             orientation:string, drawn:number, limited:boolean }}
  */
@@ -366,6 +366,9 @@ export function renderPrintCanvas(drawing, area, options = {}) {
     // 白で塗りつぶすのは上で紙ぜんたいに済ませてある。
     // ここで塗ると囲みの中だけになるので、透明な余白ができてしまう
     background: 'transparent',
+    // 「白黒で表示」を、確認画面の絵にもそのまま伝える（開発ルール53章）。
+    // ここを渡し忘れると、**画面は白黒なのに確認画面だけ色が付く**（36.2）
+    monochrome: options.monochrome === true,
   });
 
   ctx.restore();

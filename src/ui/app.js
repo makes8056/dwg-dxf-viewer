@@ -92,6 +92,11 @@ versionBadge.textContent = APP_VERSION;
 let viewportMod = null; // { createViewport, setSize, fitToBounds, toScreen, toDrawing, panBy, zoomAt, visibleBounds }
 let renderMod = null;   // { renderDrawing }
 
+// 図面を黒一色で出すか（開発ルール53章）。中身は下の「白黒で表示する／しない」で決める。
+// **ここで先に用意しておく。** redraw() はこれより上にあり、読み込み中に呼ばれても
+// 「まだ用意していない」で止まらないようにするため。
+let 白黒で表示する = false;
+
 async function loadPartnerModules() {
   try {
     viewportMod = await import('../viewport.js');
@@ -285,6 +290,8 @@ function redraw() {
     // render.js 側でも自分で計算し直すようにしてあるが、二重に守っておく。
     renderMod.renderDrawing(ctx, currentDrawing, viewport, {
       dpr: window.devicePixelRatio || 1,
+      // 白黒で表示するか（開発ルール53章）。印刷（絵・PDF）にも同じ値を渡す
+      monochrome: 白黒で表示する,
     });
   } catch (err) {
     console.error('[DXFビューア] 描画に失敗しました。', err);
@@ -359,6 +366,37 @@ unsupportedClose.addEventListener('click', () => {
 // 押しつけがましくしない：小さめの案内、1回閉じたら覚えておく。
 // ------------------------------------------------------------
 const SAFARI_HINT_STORAGE_KEY = 'dxfViewer.safariHint.closed';
+
+// ------------------------------------------------------------
+// 白黒で表示する／しない（開発ルール53章。2026-09-10 ユーザーの指示）
+//
+// お客様の図面は、配管が画層ごと赤で描かれている。図面がそう指定しているので
+// アプリの間違いではないが、**白黒プリンターでは赤が薄い灰色になって読みにくい。**
+// そこで、図面を黒一色で出す切り替えを用意した。
+//
+// 【覚えておく理由】現場で図面を開き直すたびに押し直させない。
+//   localStorage が使えない設定（プライベートブラウズ等）でも
+//   その回だけ効けばよいので、読み書きの失敗は無視する。
+// ------------------------------------------------------------
+const MONOCHROME_STORAGE_KEY = 'dxfViewer.monochrome';
+
+function 覚えている白黒設定() {
+  try {
+    return localStorage.getItem(MONOCHROME_STORAGE_KEY) === '1';
+  } catch (err) {
+    return false;
+  }
+}
+
+白黒で表示する = 覚えている白黒設定();
+
+function 白黒設定を覚える(値) {
+  try {
+    localStorage.setItem(MONOCHROME_STORAGE_KEY, 値 ? '1' : '0');
+  } catch (err) {
+    // 覚えられなくても、今回の表示には影響しない
+  }
+}
 
 function isLikelySafari() {
   const ua = navigator.userAgent || '';
@@ -961,7 +999,8 @@ async function printSelectedArea(rectScreen, info = {}) {
   loadingOverlay.hidden = false;
   let result;
   try {
-    result = await createPrintImage(currentDrawing, area);
+    // 白黒の指定は、画面・確認の絵・PDFの3つに**必ず同じものを渡す**（開発ルール36.2）
+    result = await createPrintImage(currentDrawing, area, { monochrome: 白黒で表示する });
   } catch (err) {
     // print-area.js は例外を投げない作りだが、念のため受け止める
     result = { error: `印刷用の絵を作れませんでした。\n詳細：${err && err.message ? err.message : err}` };
@@ -981,7 +1020,7 @@ async function printSelectedArea(rectScreen, info = {}) {
   //
   // PDFが作れなかったときは、今までどおり絵で印刷する（36.4）。
   // 印刷できないより、重くても印刷できるほうがよい。
-  const pdf = createPrintPdf(currentDrawing, area);
+  const pdf = createPrintPdf(currentDrawing, area, { monochrome: 白黒で表示する });
 
   // 【開発ルール28章】ここでは印刷しない。
   //
@@ -1048,6 +1087,12 @@ attachToolbar(toolbarEl, {
     }
     showDrawingList();
   },
+  onMonochrome: (白黒) => {
+    白黒で表示する = 白黒 === true;
+    白黒設定を覚える(白黒で表示する);
+    // 図面が開かれていなくても、押した状態は覚える（開いたときに効く）
+    scheduleRedraw();
+  },
   onMeasure: () => {
     if (!viewportMod || !renderMod) {
       showError('図面を表示する部品がまだ準備できていません。しばらくしてからもう一度お試しください。');
@@ -1086,7 +1131,7 @@ attachToolbar(toolbarEl, {
     fittedWidth = vp.width;
     scheduleRedraw();
   },
-});
+}, { monochrome: 白黒で表示する });
 
 // ------------------------------------------------------------
 // 指・マウスの操作（移動・拡大縮小）

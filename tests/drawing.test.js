@@ -15,6 +15,8 @@ import {
   countUnsupported,
   finishDrawing,
   computeContentBounds,
+  entityColor,
+  MONOCHROME_COLOR,
 } from '../src/drawing.js';
 
 // ------------------------------------------------------------
@@ -245,4 +247,41 @@ test('仕上げをすると、本体の範囲とはぐれ図形の数も入る',
   assert.ok(d.bounds.maxX > 900000, '本当の全体の範囲が入っていない');
   assert.ok(d.contentBounds.maxX < 1000, '図面本体の範囲が入っていない');
   assert.equal(d.outliers, 1);
+});
+
+// ------------------------------------------------------------
+// 白黒で表示する（開発ルール53章）
+//
+// お客様の図面は、配管が画層ごと赤で描かれている。図面がそう指定しているので
+// アプリの間違いではないが、白黒プリンターでは赤が薄い灰色になって読みにくい。
+// そこで、図面を黒一色にする切り替えを用意した。
+//
+// 【この関数を1つにしている理由（36.2）】
+// 図面を描く道は3本ある（画面・確認の絵・PDF）。色の決め方をそれぞれに書くと、
+// どれか1本を直し忘れて「画面は黒いのに紙だけ赤い」が起きる。
+// ------------------------------------------------------------
+
+test('白黒にしないときは、その図形の色をそのまま使う', () => {
+  assert.equal(entityColor({ type: 'line', color: '#ff0000' }, false), '#ff0000');
+});
+
+test('白黒にすると、赤い線が黒になる', () => {
+  assert.equal(entityColor({ type: 'line', color: '#ff0000' }, true), MONOCHROME_COLOR);
+  assert.equal(MONOCHROME_COLOR, '#000000');
+});
+
+test('色が書かれていない図形は、白黒でなくても黒で描く', () => {
+  assert.equal(entityColor({ type: 'line' }, false), '#000000');
+});
+
+test('書き足した文字は、白黒にしても色のまま残す', () => {
+  // 注記の色は、ユーザーが5色から選んで付けた印（44.2）。
+  // 黒くすると、その使い分けが消え、図面のもとの線とも見分けが付かなくなる。
+  const 注記 = { type: 'text', color: '#c81e1e', isNote: true, text: 'ここ直す' };
+  assert.equal(entityColor(注記, true), '#c81e1e');
+});
+
+test('図形が渡されなくても落ちない（黒を返す）', () => {
+  assert.equal(entityColor(null, false), '#000000');
+  assert.equal(entityColor(undefined, true), '#000000');
 });

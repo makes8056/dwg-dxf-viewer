@@ -10,7 +10,7 @@
 //   このファイルでは viewport.toScreen() の結果をそのまま使い、
 //   自分でY座標を反転させたり、符号を直したりしない。
 
-import { computeBounds, CAP_HEIGHT_RATIO } from './drawing.js';
+import { computeBounds, CAP_HEIGHT_RATIO, entityColor } from './drawing.js';
 import { toScreen, visibleBounds } from './viewport.js';
 
 const DEFAULT_BACKGROUND = '#ffffff';
@@ -23,7 +23,7 @@ const MIN_READABLE_TEXT_PX = 5; // これより小さい文字は描かない（
  * @param {CanvasRenderingContext2D} ctx
  * @param {object} drawing  src/drawing.js の形の図形データ
  * @param {object} viewport src/viewport.js の表示状態
- * @param {object} [options] { background, lineWidth, dpr }
+ * @param {object} [options] { background, lineWidth, dpr, monochrome }
  * @returns {{drawn:number, skipped:number}} 描いた数・省いた数
  */
 /**
@@ -59,6 +59,9 @@ export function renderDrawing(ctx, drawing, viewport, options = {}) {
   const background = options.background || DEFAULT_BACKGROUND;
   const lineWidthPx = options.lineWidth || DEFAULT_LINE_WIDTH;
   const dpr = options.dpr || inferDpr(ctx, viewport);
+  // 白黒で表示するか（開発ルール53章）。
+  // 何色で描くかを決めるのは drawing.js の entityColor() だけ。ここでは判断しない。
+  const monochrome = options.monochrome === true;
 
   const cssWidth = viewport.width;
   const cssHeight = viewport.height;
@@ -96,7 +99,7 @@ export function renderDrawing(ctx, drawing, viewport, options = {}) {
       continue;
     }
 
-    const didDraw = drawEntity(ctx, entity, viewport, lineWidthPx);
+    const didDraw = drawEntity(ctx, entity, viewport, lineWidthPx, entityColor(entity, monochrome));
     if (didDraw) {
       drawn += 1;
     } else {
@@ -123,31 +126,31 @@ function intersectsView(entity, view) {
   );
 }
 
-function drawEntity(ctx, entity, viewport, lineWidthPx) {
+function drawEntity(ctx, entity, viewport, lineWidthPx, 色) {
   switch (entity.type) {
     case 'line':
-      return drawLine(ctx, entity, viewport);
+      return drawLine(ctx, entity, viewport, 色);
     case 'polyline':
-      return drawPolyline(ctx, entity, viewport);
+      return drawPolyline(ctx, entity, viewport, 色);
     case 'circle':
-      return drawCircle(ctx, entity, viewport);
+      return drawCircle(ctx, entity, viewport, 色);
     case 'arc':
-      return drawArc(ctx, entity, viewport);
+      return drawArc(ctx, entity, viewport, 色);
     case 'ellipse':
-      return drawEllipse(ctx, entity, viewport);
+      return drawEllipse(ctx, entity, viewport, 色);
     case 'point':
-      return drawPoint(ctx, entity, viewport, lineWidthPx);
+      return drawPoint(ctx, entity, viewport, lineWidthPx, 色);
     case 'text':
-      return drawText(ctx, entity, viewport);
+      return drawText(ctx, entity, viewport, 色);
     default:
       return false; // drawing.js の決まりに無い種類。ここには来ない想定だが、念のため
   }
 }
 
-function drawLine(ctx, e, vp) {
+function drawLine(ctx, e, vp, 色) {
   const [sx1, sy1] = toScreen(vp, e.x1, e.y1);
   const [sx2, sy2] = toScreen(vp, e.x2, e.y2);
-  ctx.strokeStyle = e.color || '#000000';
+  ctx.strokeStyle = 色;
   ctx.beginPath();
   ctx.moveTo(sx1, sy1);
   ctx.lineTo(sx2, sy2);
@@ -160,20 +163,20 @@ function drawLine(ctx, e, vp) {
  * CADは $PDMODE=0 のとき小さな丸で表示する。ここも小さな丸にする。
  * 大きさは**線の太さに合わせる**ので、画面でも紙でもちょうどよい大きさになる。
  */
-function drawPoint(ctx, e, vp, lineWidthPx) {
+function drawPoint(ctx, e, vp, lineWidthPx, 色) {
   const [sx, sy] = toScreen(vp, e.x, e.y);
   const r = Math.max(0.6, (lineWidthPx || 1) * 0.9);
-  ctx.fillStyle = e.color || '#000000';
+  ctx.fillStyle = 色;
   ctx.beginPath();
   ctx.arc(sx, sy, r, 0, Math.PI * 2);
   ctx.fill();
   return true;
 }
 
-function drawPolyline(ctx, e, vp) {
+function drawPolyline(ctx, e, vp, 色) {
   const points = e.points;
   if (!Array.isArray(points) || points.length === 0) return false;
-  ctx.strokeStyle = e.color || '#000000';
+  ctx.strokeStyle = 色;
   ctx.beginPath();
   points.forEach((p, i) => {
     const [sx, sy] = toScreen(vp, p[0], p[1]);
@@ -185,11 +188,11 @@ function drawPolyline(ctx, e, vp) {
   return true;
 }
 
-function drawCircle(ctx, e, vp) {
+function drawCircle(ctx, e, vp, 色) {
   const [sx, sy] = toScreen(vp, e.cx, e.cy);
   const radiusPx = e.r * vp.scale;
   if (!(radiusPx > 0)) return false;
-  ctx.strokeStyle = e.color || '#000000';
+  ctx.strokeStyle = 色;
   ctx.beginPath();
   ctx.arc(sx, sy, radiusPx, 0, Math.PI * 2);
   ctx.stroke();
@@ -200,7 +203,7 @@ function drawCircle(ctx, e, vp) {
 // CanvasのarcはラジアンでY軸が下向きのため、角度の符号を反転させる必要がある
 // （viewport.js が図面→画面でY軸を反転させているのと同じ理由）。
 // ここを間違えると、90度の円弧が左下に出るなど向きが逆になる。
-function drawArc(ctx, e, vp) {
+function drawArc(ctx, e, vp, 色) {
   const [sx, sy] = toScreen(vp, e.cx, e.cy);
   const radiusPx = e.r * vp.scale;
   if (!(radiusPx > 0)) return false;
@@ -212,7 +215,7 @@ function drawArc(ctx, e, vp) {
   const canvasStart = -toRad(e.startAngle);
   const canvasEnd = -toRad(e.endAngle);
 
-  ctx.strokeStyle = e.color || '#000000';
+  ctx.strokeStyle = 色;
   ctx.beginPath();
   ctx.arc(sx, sy, radiusPx, canvasStart, canvasEnd, true);
   ctx.stroke();
@@ -226,7 +229,7 @@ function drawArc(ctx, e, vp) {
  * 図面のY軸は上向き、画面のY軸は下向きなので、そのまま渡すと上下が逆の楕円になる。
  * 傾き（rotation）も同じく反転が必要。
  */
-function drawEllipse(ctx, e, vp) {
+function drawEllipse(ctx, e, vp, 色) {
   const [sx, sy] = toScreen(vp, e.cx, e.cy);
   const rxPx = e.rx * vp.scale;
   const ryPx = e.ry * vp.scale;
@@ -244,7 +247,7 @@ function drawEllipse(ctx, e, vp) {
   if (sweep === 0) sweep = 360;
   const end = start + sweep;
 
-  ctx.strokeStyle = e.color || '#000000';
+  ctx.strokeStyle = 色;
   ctx.beginPath();
   // 角度の向きは円弧（drawArc）と同じ理由で反転させる
   ctx.ellipse(sx, sy, rxPx, ryPx, -toRad(e.rotation || 0), -toRad(start), -toRad(end), true);
@@ -262,7 +265,7 @@ function toCanvasBaseline(value) {
   return 'alphabetic'; // 'baseline' など、Canvasに無い名前はここに落ちる
 }
 
-function drawText(ctx, e, vp) {
+function drawText(ctx, e, vp, 色) {
   // CADの高さ ＝ 大文字そのものの高さ。画面での大きさはこれで測る
   const 大文字px = (e.height || 0) * vp.scale;
   // 小さすぎて読めない文字は描かない（読めない文字で画面が真っ黒になるのを防ぐ）
@@ -277,7 +280,7 @@ function drawText(ctx, e, vp) {
   const rotationDeg = e.rotation || 0;
 
   ctx.save();
-  ctx.fillStyle = e.color || '#000000';
+  ctx.fillStyle = 色;
   ctx.font = `${fontPx}px sans-serif`;
   // 文字を書き出す点の、どこに文字を置くか（drawing.js の hAlign / vAlign）。
   // 寸法の数字は「中央ぞろえ」で置かれるので、ここを左端に決め打ちすると
