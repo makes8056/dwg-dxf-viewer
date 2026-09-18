@@ -1654,3 +1654,71 @@ test('3DFACEで、角が重なっていても長さ0の線を作らない', () =
     );
   }
 });
+
+// ============================================================
+// 53章：弧の長さの寸法（ARC_DIMENSION）など、名前の違う寸法
+// ============================================================
+
+test('弧の長さの寸法（ARC_DIMENSION）を「表示できませんでした」にせず、中身を描く（53章）', () => {
+  // 【実物で起きたこと】2026-09-18 ユーザーの画面に
+  //   「3個の図形は表示できませんでした（種類：ARC_DIMENSION 3個）」と出た。
+  // 寸法と同じ作りなのに、名前が違うだけで数えていた。
+  const d = load('arc-dimension.dxf');
+  assert.equal(
+    d.unsupported.kinds.ARC_DIMENSION,
+    undefined,
+    'ARC_DIMENSION をまだ「表示できない」に数えている'
+  );
+
+  // 部品 *D1 の中身：半径60・0〜90度の弧、補助線2本、数字「94.25」
+  const 弧 = only(d, 'arc').filter((e) => Math.abs(e.r - 60) < 1e-6);
+  assert.equal(弧.length, 1, '寸法の弧が出ていない');
+  near(弧[0].cx, 0, '寸法の弧の中心X');
+  near(弧[0].cy, 0, '寸法の弧の中心Y');
+  near(弧[0].startAngle, 0, '寸法の弧の始まりの角度');
+  near(弧[0].endAngle, 90, '寸法の弧の終わりの角度');
+
+  const 数字 = only(d, 'text').find((e) => e.text === '94.25');
+  assert.ok(数字, '寸法の数字「94.25」が出ていない');
+  // 部品は図面の座標そのままで書かれている。ずらしてはいけない
+  near(数字.x, 45, '寸法の数字の位置X');
+  near(数字.y, 45, '寸法の数字の位置Y');
+
+  const 補助線 = only(d, 'line').filter((e) => e.x2 === 62 || e.y2 === 62);
+  assert.equal(補助線.length, 2, `補助線が2本出ていない（${補助線.length} 本）`);
+});
+
+test('弧の長さの寸法の中身は、寸法を置いたレイヤーの色になる（親に従う色）', () => {
+  // 部品の中身は「親に従う色（BYBLOCK）」。寸法を置いたレイヤー DIM は色3（緑）
+  const d = load('arc-dimension.dxf');
+  const DIMの色 = d.layers.find((L) => L.name === 'DIM').color;
+  const 弧 = only(d, 'arc').find((e) => Math.abs(e.r - 60) < 1e-6);
+  assert.equal(弧.color, DIMの色, '寸法の色が、置いたレイヤーの色になっていない');
+  assert.equal(弧.layer, 'DIM', '部品の中のレイヤー0が、置いたレイヤーに従っていない');
+});
+
+test('弧の長さの寸法から作った線にも、寸法の印を付ける（長さを測るで後回しにする。41章）', () => {
+  const d = load('arc-dimension.dxf');
+  const 弧 = only(d, 'arc').find((e) => Math.abs(e.r - 60) < 1e-6);
+  assert.equal(弧.fromDimension, true, '寸法の印が付いていない（寸法線に吸い付いてしまう）');
+});
+
+test('部品が無い弧の長さの寸法は、黙って捨てず種類名つきで数える（10.5）', () => {
+  const d = load('arc-dimension.dxf');
+  assert.equal(
+    d.unsupported.kinds['ARC_DIMENSION（寸法の部品が見つからない）'],
+    1,
+    `数え方が違う：${JSON.stringify(d.unsupported.kinds)}`
+  );
+  // DIMENSION と取り違えて数えていないこと（何が足りないか分からなくなる）
+  assert.equal(d.unsupported.kinds['DIMENSION（寸法の部品が見つからない）'], undefined);
+});
+
+test('折り曲げた半径の寸法（LARGE_RADIAL_DIMENSION）も、同じ道で中身を描く', () => {
+  const d = load('arc-dimension.dxf');
+  assert.equal(d.unsupported.kinds.LARGE_RADIAL_DIMENSION, undefined, 'まだ数えている');
+  const 数字 = only(d, 'text').find((e) => e.text === 'R500');
+  assert.ok(数字, '折り曲げた半径の寸法の数字が出ていない');
+  near(数字.x, 342, '数字の位置X');
+  assert.equal(数字.fromDimension, true, '寸法の印が付いていない');
+});

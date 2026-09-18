@@ -1875,6 +1875,21 @@ const MAX_BLOCK_DEPTH = 20; // 入れ子ブロックの無限ループ対策
 const MAX_ARRAY_COPIES = 1000;
 
 /**
+ * 寸法として展開する図形の種類（開発ルール53章）。
+ *
+ * 【ARC_DIMENSION を足した理由（v0.4.10／2026-09-18 ユーザーの指示）】
+ * 弧の長さの寸法（ARC_DIMENSION）は、ふつうの寸法とは**別の名前**で書かれる。
+ * 名前だけで判断していたので「表示できませんでした」に回っていた。
+ * 中身は DIMENSION とまったく同じで、線・矢印・数字を入れた部品の名前（コード2）を
+ * 指しているだけ。部品の中身も図面の座標そのままで書かれる。
+ * そのため、新しい描き方は作らず、**寸法と同じ道に乗せる。**
+ *
+ * LARGE_RADIAL_DIMENSION（折り曲げた半径の寸法）も同じ作りなので、あわせて入れる。
+ * どちらも「部品が見つからない」ときは、これまでどおり種類名つきで数える（10.5）。
+ */
+const DIMENSION_TYPES = new Set(['DIMENSION', 'ARC_DIMENSION', 'LARGE_RADIAL_DIMENSION']);
+
+/**
  * 寸法（DIMENSION）を展開する。
  *
  * 【実物の図面で調べて分かったこと】
@@ -1889,6 +1904,7 @@ const MAX_ARRAY_COPIES = 1000;
  * 参考図.dxf では32個の寸法が全部消えていました。
  */
 function expandDimension(rec, drawing, ctx, blocks, layerColorMap) {
+  // ※ ARC_DIMENSION（弧の長さの寸法）なども、ここを通る（開発ルール53章）
   const g = rec.groups;
   const raw = firstValue(g, 2);
   const name = raw === undefined ? '' : String(raw).trim();
@@ -1896,11 +1912,11 @@ function expandDimension(rec, drawing, ctx, blocks, layerColorMap) {
 
   if (!block) {
     // 部品が見つからない寸法は描けない。黙って捨てず数える（開発ルール10.5）
-    countUnsupported(drawing, 'DIMENSION（寸法の部品が見つからない）');
+    countUnsupported(drawing, `${rec.type}（寸法の部品が見つからない）`);
     return;
   }
   if (ctx.depth >= MAX_BLOCK_DEPTH) {
-    countUnsupported(drawing, 'DIMENSION（入れ子が深すぎるため打ち切り）');
+    countUnsupported(drawing, `${rec.type}（入れ子が深すぎるため打ち切り）`);
     return;
   }
 
@@ -2151,7 +2167,8 @@ function expandRecords(records, drawing, ctx, blocks, layerColorMap) {
         convertPoint(rec, drawing, ctx, layerColorMap);
       } else if (rec.type === 'INSERT') {
         expandInsert(rec, drawing, ctx, blocks, layerColorMap);
-      } else if (rec.type === 'DIMENSION') {
+      } else if (DIMENSION_TYPES.has(rec.type)) {
+        // 寸法はどの種類も「中身の部品を指しているだけ」なので、同じ道で描く（開発ルール53章）
         expandDimension(rec, drawing, ctx, blocks, layerColorMap);
       } else if (rec.type === 'VIEWPORT') {
         // VIEWPORT は「印刷レイアウトののぞき窓」の設定であって、図面の線ではありません。
