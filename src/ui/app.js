@@ -1131,17 +1131,14 @@ window.addEventListener('orientationchange', () => {
 // 現場で図面を見ている最中に、勝手に画面が変わらないようにするため。
 // ------------------------------------------------------------
 
-// このページを開いた時点で、すでにオフライン用の仕組みが担当についていたか。
+// 【初めて開いた人に「更新があります」と出さない仕掛けは、update-check.js にある】
 //
-// 【ワーカーからの申し送り】
-// はじめてこのアプリを開いたときは、オフラインの準備が終わった合図が
-// 「更新があります」と同じ形で1回飛んでくる。
-// そのまま出すと、**初めて開いた人にいきなり「更新があります」と出てしまう。**
-// 最初から担当がついていたかどうかで見分けて、初回は出さない。
-const hadControllerAtStart =
-  typeof navigator !== 'undefined' &&
-  navigator.serviceWorker &&
-  Boolean(navigator.serviceWorker.controller);
+// はじめて開いたときも、オフラインの準備が終わると「更新」と同じ形の合図が来る。
+// 以前はここで「開いた瞬間にページの担当（controller）がいたか」で見分けて止めていた。
+// ところが**iPadのホーム画面のアプリでは、新しい版が待っていても案内が出なかった**
+// （2026-09-18。開発ルール54章）。担当がいたかどうかはページの開かれ方で変わるためである。
+// 今は update-check.js が「すでに動いている版があるか」で見分けてから知らせてくるので、
+// ここでは届いた知らせをそのまま出す。
 
 function setupUpdateBanner() {
   updateClose.addEventListener('click', () => {
@@ -1150,10 +1147,6 @@ function setupUpdateBanner() {
 
   startUpdateCheck({
     onUpdateReady: (applyUpdate) => {
-      if (!hadControllerAtStart) {
-        // 初回の準備完了。更新ではないので案内は出さない。
-        return;
-      }
       updateBanner.classList.remove('is-error');
       updateApply.hidden = false;
       updateHelp.hidden = true;
@@ -1179,7 +1172,6 @@ function setupUpdateBanner() {
       // 【開発ルール40章】更新の失敗を黙って捨てない。
       // 捨てていたために、iPadが古い版のまま止まっていることに誰も気づけなかった。
       console.warn('[DXFビューア] 更新できませんでした。', err);
-      if (!hadControllerAtStart) return;
       updateBanner.classList.add('is-error');
       updateApply.hidden = true;
       updateHelp.hidden = false;

@@ -66,6 +66,14 @@ export async function startUpdateCheck(handlers = {}) {
   function notifyIfWaiting(reg) {
     const waiting = reg.waiting;
     if (!waiting) return;
+    // 【更新かどうかは、ここで決める（開発ルール54章）】
+    // すでに動いている版（active）があって、そのうえで次の版が待っているときだけが「更新」。
+    // はじめて開いたときは active が無いので、案内を出さない。
+    //
+    // 以前は画面の側で「開いた瞬間にページの担当（controller）がいたか」で見分けていた。
+    // ところがiPadのホーム画面のアプリでは、**新しい版が待っていても案内が出ない**ことがあった。
+    // 担当がいたかどうかは、ページの開かれ方で変わる。版があるかどうかは変わらない。
+    if (!reg.active) return;
     if (waiting === 案内済みのSW) return;
     案内済みのSW = waiting;
     onUpdateReady(() => {
@@ -96,7 +104,7 @@ export async function startUpdateCheck(handlers = {}) {
       // ただし redundant は、ふつうの世代交代でも起きる
       // （更新したあと、さらに新しい版に置き換わったとき）。
       // 一度も取り込めていないときだけを「失敗」とする。
-      if (installing.state === 'redundant' && !取り込めた) {
+      if (installing.state === 'redundant' && !取り込めた && registration.active) {
         onUpdateError(
           new Error('新しい版を端末に取り込めませんでした（容量不足か、通信が途中で切れた可能性）')
         );
@@ -141,7 +149,7 @@ export async function startUpdateCheck(handlers = {}) {
       .catch((err) => {
         // ネットワークが無いだけなら、それは失敗ではない（オフラインでも使うアプリ）。
         // 通信できているのに失敗した場合だけ知らせる。
-        if (navigator.onLine) onUpdateError(err);
+        if (navigator.onLine && registration.active) onUpdateError(err);
       });
   }
 
@@ -162,4 +170,20 @@ export async function startUpdateCheck(handlers = {}) {
 
   // 4. 開きっぱなしのときのために、ときどき見に行く（現場で開いたままのことがある）
   setInterval(() => checkForUpdate(true), UPDATE_CHECK_INTERVAL_MS);
+
+  // 5. **開いた瞬間**にも見に行く（開発ルール54章）
+  //
+  // 【iPadのホーム画面のアプリで、古い版のまま止まっていた（2026-09-18）】
+  // 上の1〜4は、どれも「開いたあとで何かが起きたとき」にしか動かない。
+  // ホーム画面のアプリは、しばらく使わないとiPadに**丸ごと閉じられ**、
+  // 次は一から開き直される。そのとき：
+  //   - 表に戻る（1）… 最初から表にいるので起きない
+  //   - ウィンドウが選ばれる（2）… iPadでは起きない
+  //   - 冷凍保存からの復活（3）… 一から開いたので起きない
+  //   - 30分ごと（4）… 30分使い続けないと来ない
+  // つまり**一度も見に行かないまま**使い終わっていた。
+  //
+  // また、登録（register）は、すでに登録済みなら**見に行かずに終わる**決まりなので、
+  // 登録し直しても代わりにはならない。ここで自分から見に行く。
+  checkForUpdate(true);
 }
