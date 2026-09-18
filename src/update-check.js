@@ -36,7 +36,14 @@ export async function startUpdateCheck(handlers = {}) {
 
   let registration;
   try {
-    registration = await navigator.serviceWorker.register('./service-worker.js');
+    // 【updateViaCache: 'none'（開発ルール55章）】
+    // 新しい版があるかを見に行くとき、service-worker.js を**ブラウザの控え（HTTPキャッシュ）から
+    // 読まず、必ず公開先へ取りに行かせる。**
+    // GitHub Pages は「10分は控えを使ってよい」と返すので（21章）、控えを使われると、
+    // 公開してから10分のあいだ裏から戻っても**古いまま「新しい版は無い」**と判断されてしまう。
+    registration = await navigator.serviceWorker.register('./service-worker.js', {
+      updateViaCache: 'none',
+    });
   } catch (e) {
     // 登録に失敗しても、アプリ自体はオンラインで動き続けられるようにする。
     onOffline(false);
@@ -85,10 +92,19 @@ export async function startUpdateCheck(handlers = {}) {
   // 登録した時点ですでに待機中のSWがいる場合（ページを開いた直後に検出済みだったケース）
   notifyIfWaiting(registration);
 
-  // 新しいService Workerが見つかるたびに、結果が出るのを待って知らせる。
-  registration.addEventListener('updatefound', () => {
-    const installing = registration.installing;
-    if (!installing) return;
+  // 新しいService Workerの取り込みを、終わるまで見届けて知らせる。
+  //
+  // 【見届けを始める入口を3つにした（開発ルール55章）】
+  //   - 新しい版が見つかった合図（updatefound）
+  //   - 見に行った結果、取り込みの最中だったとき
+  //   - 開いた時点で、すでに取り込みの最中だったとき
+  // 裏に回っている間はページが凍っているので、合図を**取りこぼす**ことがある。
+  // 合図が1つだけだと、取りこぼした時点で案内が出なくなる。
+  // 同じSWを二度見届けないよう、見届け中のものは覚えておく。
+  const 見届け中 = new WeakSet();
+  function 見届ける(installing) {
+    if (!installing || 見届け中.has(installing)) return;
+    見届け中.add(installing);
     // この新しいSWが、一度でも「取り込めた（installed）」ところまで行けたか。
     let 取り込めた = false;
     installing.addEventListener('statechange', () => {
@@ -110,7 +126,11 @@ export async function startUpdateCheck(handlers = {}) {
         );
       }
     });
-  });
+  }
+
+  registration.addEventListener('updatefound', () => 見届ける(registration.installing));
+  // 開いた時点で、すでに取り込みの最中だった場合
+  見届ける(registration.installing);
 
   // ------------------------------------------------------------
   // いつ更新を見に行くか
@@ -132,6 +152,12 @@ export async function startUpdateCheck(handlers = {}) {
    * @param {boolean} force 前回からの間隔を気にせず必ず見に行くか
    */
   function checkForUpdate(force = false) {
+    // 【通信の前に、まず手元を確かめる（開発ルール55章）】
+    // 裏にいる間に取り込みが終わっていたら、そのときの合図は取りこぼしている。
+    // 「待っている版」は手元にあるので、見に行く間隔（30秒）に関係なく、
+    // 表に戻った瞬間に案内する。通信は要らないので何度呼んでもよい。
+    notifyIfWaiting(registration);
+
     const now = Date.now();
     // 短い間に何度も見に行かないようにする（画面の切り替えを繰り返したときの無駄を防ぐ）
     if (!force && now - lastCheckedAt < MIN_CHECK_GAP_MS) return;
@@ -145,6 +171,10 @@ export async function startUpdateCheck(handlers = {}) {
         // **二度と案内が出なくなる**。すでに待機中のSWには合図が出ないためである。
         // ここで拾い直せば、次に表へ戻ってきたときに必ず気づける。
         notifyIfWaiting(registration);
+        // 見に行った時点では、まだ取り込みの最中のことが多い
+        // （update() は、取り込みが終わるのを待たずに返ってくる）。
+        // その場合は、終わるまで見届けてから知らせる。
+        見届ける(registration.installing);
       })
       .catch((err) => {
         // ネットワークが無いだけなら、それは失敗ではない（オフラインでも使うアプリ）。

@@ -13,26 +13,49 @@ import { startUpdateCheck } from '../src/update-check.js';
 /** 何も起きない待ち（Promise の続きを1周ぶん進める）。 */
 const 少し待つ = () => new Promise((r) => setImmediate(r));
 
+/** 偽物のService Worker。状態が変わると statechange の合図を出す。 */
+function 偽のSW(state) {
+  const 聞き手 = [];
+  return {
+    state,
+    addEventListener(種類, f) { if (種類 === 'statechange') 聞き手.push(f); },
+    postMessage() {},
+    状態を変える(次) { this.state = 次; for (const f of 聞き手) f(); },
+  };
+}
+
 /**
- * ブラウザの部品を偽物にして、startUpdateCheck を動かす。
+ * ブラウザの部品を偽物にして、startUpdateCheck を動かせる状態にする。
+ * **片付け() を呼ぶまで偽物は置いたまま**（裏から戻る、などをあとから起こせるように）。
+ *
  * @param {object} 状況
  *   active        … すでに動いている版があるか
  *   waiting       … 開いた時点で、次の版が待っているか
  *   controller    … ページの担当がいるか（iPadのホーム画面では無いことがある）
- *   見に行くと見つかる … update() を呼ぶと次の版が見つかるか
+ *   見に行くと見つかる … update() を呼ぶと次の版が（取り込み済みで）待っている
+ *   見に行くと取り込みが始まる … update() を呼ぶと取り込みの最中になる
+ *   新しい版の合図を取りこぼす … 取り込みが始まっても updatefound が届かない
  *   見に行くと失敗する … update() が失敗するか
  */
-async function 動かす(状況 = {}) {
-  const 記録 = { 見に行った回数: 0, 案内: 0, 失敗: 0 };
+async function 用意する(状況 = {}) {
+  const 記録 = { 見に行った回数: 0, 案内: 0, 失敗: 0, 登録の指定: null };
+  const 登録の聞き手 = [];
+  const 画面の聞き手 = [];
+  let 今 = 1_000_000;
+
   const registration = {
-    active: 状況.active ? { state: 'activated' } : null,
-    waiting: 状況.waiting ? { postMessage() {} } : null,
+    active: 状況.active ? 偽のSW('activated') : null,
+    waiting: 状況.waiting ? 偽のSW('installed') : null,
     installing: null,
-    addEventListener() {},
+    addEventListener(種類, f) { if (種類 === 'updatefound') 登録の聞き手.push(f); },
     update() {
       記録.見に行った回数 += 1;
       if (状況.見に行くと失敗する) return Promise.reject(new Error('通信に失敗'));
-      if (状況.見に行くと見つかる) this.waiting = { postMessage() {} };
+      if (状況.見に行くと見つかる) this.waiting = 偽のSW('installed');
+      if (状況.見に行くと取り込みが始まる) {
+        this.installing = 偽のSW('installing');
+        if (!状況.新しい版の合図を取りこぼす) for (const f of 登録の聞き手) f();
+      }
       return Promise.resolve();
     },
   };
@@ -42,22 +65,38 @@ async function 動かす(状況 = {}) {
     document: Object.getOwnPropertyDescriptor(globalThis, 'document'),
     window: Object.getOwnPropertyDescriptor(globalThis, 'window'),
     setInterval: globalThis.setInterval,
+    now: Date.now,
   };
   const 置く = (名前, 値) =>
     Object.defineProperty(globalThis, 名前, { value: 値, configurable: true, writable: true });
 
+  const 画面 = {
+    hidden: false,
+    addEventListener(種類, f) { if (種類 === 'visibilitychange') 画面の聞き手.push(f); },
+  };
   置く('navigator', {
     onLine: true,
     serviceWorker: {
       controller: 状況.controller ? {} : null,
-      register: async () => registration,
+      register: async (_url, 指定) => { 記録.登録の指定 = 指定 || null; return registration; },
       addEventListener() {},
     },
   });
-  置く('document', { hidden: false, addEventListener() {} });
+  置く('document', 画面);
   置く('window', { addEventListener() {}, location: { reload() {} } });
   // 30分ごとの見張りは、テストが終わらなくなるので止めておく
   globalThis.setInterval = () => 0;
+  // 時間はテストの側で進める（「30秒以内に何度も見に行かない」を確かめるため）
+  Date.now = () => 今;
+
+  const 片付け = () => {
+    for (const 名前 of ['navigator', 'document', 'window']) {
+      if (元[名前]) Object.defineProperty(globalThis, 名前, 元[名前]);
+      else delete globalThis[名前];
+    }
+    globalThis.setInterval = 元.setInterval;
+    Date.now = 元.now;
+  };
 
   try {
     await startUpdateCheck({
@@ -65,14 +104,47 @@ async function 動かす(状況 = {}) {
       onUpdateError: () => { 記録.失敗 += 1; },
     });
     await 少し待つ();
-  } finally {
-    for (const 名前 of ['navigator', 'document', 'window']) {
-      if (元[名前]) Object.defineProperty(globalThis, 名前, 元[名前]);
-      else delete globalThis[名前];
-    }
-    globalThis.setInterval = 元.setInterval;
+  } catch (e) {
+    片付け();
+    throw e;
   }
-  return 記録;
+
+  return {
+    記録,
+    registration,
+    片付け,
+    時間を進める(ミリ秒) { 今 += ミリ秒; },
+    /** 裏に回る → 表に戻る（iPadで別のアプリから戻ってきたとき） */
+    async 裏から戻る() {
+      画面.hidden = true;
+      for (const f of 画面の聞き手) f();
+      画面.hidden = false;
+      for (const f of 画面の聞き手) f();
+      await 少し待つ();
+    },
+    /** 取り込みの最中だった新しい版が、取り込みに失敗する（容量不足・通信切れ） */
+    async 取り込みに失敗する() {
+      const sw = registration.installing;
+      registration.installing = null;
+      sw.状態を変える('redundant');
+      await 少し待つ();
+    },
+    /** 取り込みの最中だった新しい版が、取り込み終わる */
+    async 取り込みが終わる() {
+      const sw = registration.installing;
+      registration.installing = null;
+      registration.waiting = sw;
+      sw.状態を変える('installed');
+      await 少し待つ();
+    },
+  };
+}
+
+/** 開いて、そのまま片付ける（開いた瞬間のことだけ見るテスト用）。 */
+async function 動かす(状況 = {}) {
+  const h = await 用意する(状況);
+  h.片付け();
+  return h.記録;
 }
 
 // ------------------------------------------------------------
@@ -133,4 +205,87 @@ test('画面の側（app.js）で、ページの担当がいるかどうかで�
     !/serviceWorker\.controller/.test(実行部分),
     'app.js が serviceWorker.controller を見ている（ホーム画面のアプリで案内が出なくなる）'
   );
+});
+
+// ------------------------------------------------------------
+// 2026-09-18 裏から戻っただけでは、更新の案内が出なかった（開発ルール55章）
+// ------------------------------------------------------------
+
+test('裏から戻ったら見に行き、取り込みが終わったところで案内を出す', async () => {
+  const h = await 用意する({ active: true, controller: true, 見に行くと取り込みが始まる: true });
+  try {
+    // 開いた瞬間にも見に行くので、そのぶんの取り込みを終わらせてから数え直す
+    await h.取り込みが終わる();
+    assert.equal(h.記録.案内, 1, '開いた瞬間に見つけた新しい版で、案内していない');
+  } finally {
+    h.片付け();
+  }
+});
+
+test('新しい版の合図（updatefound）を取りこぼしても、取り込みを見届けて案内を出す', async () => {
+  // 裏に回っている間はページが凍っている。合図は届かないことがある
+  const h = await 用意する({
+    active: true,
+    controller: true,
+    見に行くと取り込みが始まる: true,
+    新しい版の合図を取りこぼす: true,
+  });
+  try {
+    await h.取り込みが終わる();
+    assert.equal(h.記録.案内, 1, '合図を取りこぼしただけで、案内が出なくなっている');
+  } finally {
+    h.片付け();
+  }
+});
+
+test('裏にいる間に取り込みが終わっていたら、表に戻った瞬間に案内を出す（30秒以内でも）', async () => {
+  const h = await 用意する({ active: true, controller: true });
+  try {
+    assert.equal(h.記録.案内, 0);
+    // 裏にいる間に、合図なしで取り込みが終わった
+    h.registration.waiting = 偽のSW('installed');
+    h.時間を進める(5 * 1000); // 開いてから5秒。見に行く間隔（30秒）より短い
+    await h.裏から戻る();
+    assert.equal(h.記録.案内, 1, '手元に新しい版が待っているのに、戻っても案内していない');
+  } finally {
+    h.片付け();
+  }
+});
+
+test('表に戻ったとき、30秒たっていれば見に行く。たっていなければ通信しない', async () => {
+  const h = await 用意する({ active: true, controller: true });
+  try {
+    const 開いたとき = h.記録.見に行った回数;
+    h.時間を進める(10 * 1000);
+    await h.裏から戻る();
+    assert.equal(h.記録.見に行った回数, 開いたとき, '10秒しかたっていないのに見に行っている');
+    h.時間を進める(60 * 1000);
+    await h.裏から戻る();
+    assert.equal(h.記録.見に行った回数, 開いたとき + 1, '30秒たったのに見に行っていない');
+  } finally {
+    h.片付け();
+  }
+});
+
+test('新しい版を見に行くとき、ブラウザの控えを使わせない（updateViaCache: none）', async () => {
+  // GitHub Pages は「10分は控えを使ってよい」と返す。控えを使われると、
+  // 公開してから10分のあいだ、裏から戻っても「新しい版は無い」と判断される
+  const 記録 = await 動かす({ active: true, controller: true });
+  assert.equal(
+    記録.登録の指定 && 記録.登録の指定.updateViaCache,
+    'none',
+    `登録の指定が違う：${JSON.stringify(記録.登録の指定)}`
+  );
+});
+
+test('同じ取り込みを二度見届けない（失敗の知らせが二重に届かない）', async () => {
+  // 見届けの入口は3つある（合図・見に行った結果・開いた時点）。
+  // 同じ取り込みに2回つくと、失敗したときに知らせが2回届く
+  const h = await 用意する({ active: true, controller: true, 見に行くと取り込みが始まる: true });
+  try {
+    await h.取り込みに失敗する();
+    assert.equal(h.記録.失敗, 1, `失敗の知らせが ${h.記録.失敗} 回届いている`);
+  } finally {
+    h.片付け();
+  }
 });
