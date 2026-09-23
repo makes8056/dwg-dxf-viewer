@@ -275,9 +275,10 @@ test('保存のボタンの名前は、実際に保存されるものに合わ�
 
 test('保存したあと、すぐに片付けない', () => {
   // 【開発ルール28.3】保存が終わる前に片付けると、途中で切れることがある
+  // 置き場所を選べないときのダウンロード（開発ルール56章）が、その道にあたる
   const app = read('src/ui/app.js');
-  const i = app.indexOf('function savePrintFile');
-  assert.ok(i >= 0, '保存の処理が無い');
+  const i = app.indexOf('function ダウンロードで保存する');
+  assert.ok(i >= 0, 'ダウンロードで保存する処理が無い');
   const body = app.slice(i, app.indexOf('\n}\n', i));
   assert.match(body, /setTimeout\(/, 'すぐに片付けている');
   assert.match(body, /revokeObjectURL/, '後片付けをしていない（あとで必ずやること）');

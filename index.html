@@ -69,6 +69,14 @@
     <button type="button" id="browser-hint-close" class="hint-close" aria-label="この案内を閉じる">×</button>
   </div>
 
+  <!-- 保存したとき、どこに入ったかのお知らせ（開発ルール56章）。
+       置き場所を選べたとき（共有メニュー・名前を付けて保存）は出さない。
+       選べなかったときだけ、「どこに入ったか分からない」を防ぐために出す。 -->
+  <div id="saved-hint" class="hint" role="status" hidden>
+    <span id="saved-text" class="hint-text"></span>
+    <button type="button" id="saved-close" class="hint-close" aria-label="このお知らせを閉じる">×</button>
+  </div>
+
   <!-- 新しい版が届いたときの案内（開発ルール5.2）。
        黙って切り替えず、押されたときだけ切り替える。作業中の図面を飛ばさないため。 -->
   <div id="update-banner" class="update-banner" hidden>

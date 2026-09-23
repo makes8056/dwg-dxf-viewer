@@ -43,6 +43,7 @@ import {
 } from '../notes.js';
 import { findSnapPoint, SNAP_RADIUS_PX } from '../measure.js';
 import { startUpdateCheck } from '../update-check.js';
+import { saveFile, ダウンロード } from '../save-file.js';
 
 // ------------------------------------------------------------
 // 画面の部品を取得
@@ -82,6 +83,10 @@ const printImage = document.getElementById('print-image');
 
 const browserHint = document.getElementById('browser-hint');
 const browserHintClose = document.getElementById('browser-hint-close');
+
+const savedHint = document.getElementById('saved-hint');
+const savedText = document.getElementById('saved-text');
+const savedClose = document.getElementById('saved-close');
 
 versionBadge.textContent = APP_VERSION;
 
@@ -312,6 +317,24 @@ function hideError() {
   errorBanner.hidden = true;
 }
 errorClose.addEventListener('click', hideError);
+
+// 保存したあとの短いお知らせ（開発ルール56章）。
+// エラーではないので赤い帯にはしない。ボタンの上に少しの間だけ出す。
+let 保存のお知らせを消す時計 = null;
+function showSaved(message) {
+  if (!savedHint || !savedText) return;
+  savedText.textContent = message;
+  savedHint.hidden = false;
+  if (保存のお知らせを消す時計) clearTimeout(保存のお知らせを消す時計);
+  // 出しっぱなしにすると図面が隠れる。しばらくしたら自分で消える
+  保存のお知らせを消す時計 = setTimeout(() => { savedHint.hidden = true; }, 15000);
+}
+if (savedClose) {
+  savedClose.addEventListener('click', () => {
+    savedHint.hidden = true;
+    if (保存のお知らせを消す時計) clearTimeout(保存のお知らせを消す時計);
+  });
+}
 
 function showUnsupported(drawing) {
   const messages = [];
@@ -547,42 +570,72 @@ const printPreview = createPrintPreview({
 });
 
 /**
- * 作ったPDF（またはPNG）を、ファイルとして保存する（開発ルール37.4）。
+ * 作ったPDF（またはPNG）を保存する（開発ルール37.4・56章）。
  *
- * 印刷せずに、手元に残したり人に送ったりしたいことがある。
- * PDFはもう作ってあるので、保存はそれを渡すだけ。
- *
- * iPadのSafariでは「ファイル」アプリに保存され、
- * パソコンではダウンロードのフォルダーに入る。
+ * **置き場所を選べる道から順に試す**（どの道を使うかは src/save-file.js が決める）。
+ *   iPad     … 共有メニュー →「"ファイル"に保存」でフォルダーを選べる
+ *   パソコン … 「名前を付けて保存」の画面（Chrome・Edge）
+ *   だめなら … ブラウザ任せのダウンロード。**どこに入ったかを画面に出す**
  *
  * 【押した流れの中で終わらせること】待ち時間を入れると、
- * ブラウザが「勝手なダウンロード」とみなして止めることがある（28.3と同じ理由）。
+ * iPadが共有メニューを開かせないことがある（開発ルール28.3）。
  */
 function savePrintFile(blob, name) {
-  if (!blob) {
-    showError('保存するものがありません。もう一度範囲を囲んでください。');
-    return;
-  }
-  try {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name || '図面.pdf';
-    // Safariは、画面に置いてからでないと押せないことがある
-    a.style.cssText = 'position:fixed; left:-9999px; top:0;';
-    document.body.appendChild(a);
-    a.click();
-    // 【28.3】すぐ片付けない。保存が終わる前に消すと、途中で切れることがある
-    setTimeout(() => {
-      try { a.remove(); URL.revokeObjectURL(url); } catch (err) { /* 片付け損ねても害はない */ }
-    }, 60000);
-    printPreview.hide();
-  } catch (err) {
-    showError(
-      'ファイルを保存できませんでした。\n' +
-        '確認の画面の絵を長押しして「画像を保存」でも残せます。'
-    );
-  }
+  saveFile(
+    blob,
+    name,
+    {
+      isApple: isApplePrintShareDevice(),
+      share: typeof navigator.share === 'function' ? (データ) => navigator.share(データ) : null,
+      canShare: typeof navigator.canShare === 'function' ? (データ) => navigator.canShare(データ) : null,
+      makeFile: (b, 名前, 種類) => new File([b], 名前, { type: 種類 }),
+      showSaveFilePicker:
+        typeof window.showSaveFilePicker === 'function'
+          ? (指定) => window.showSaveFilePicker(指定)
+          : null,
+      download: ダウンロードで保存する,
+    },
+    {
+      onSaved: (方法) => {
+        printPreview.hide();
+        // 置き場所を選べなかったときだけ、どこに入ったかを知らせる。
+        // **これが今回の困りごとそのもの**（「どこに保存されたかわからなくなる」）
+        if (方法 === ダウンロード) showSaved(保存先の案内());
+      },
+      // 自分でやめたときは何も出さない（失敗ではない）。確認の画面も出したままにする
+      onCancel: () => {},
+      onError: (err) => {
+        showError(
+          'ファイルを保存できませんでした。\n' +
+            '確認の画面の絵を長押しして「画像を保存」でも残せます。' +
+            (err && err.message ? '\n詳細：' + err.message : '')
+        );
+      },
+    }
+  );
+}
+
+/** ブラウザ任せのダウンロード（最後の道）。置き場所は選べない。 */
+function ダウンロードで保存する(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name || '図面.pdf';
+  // Safariは、画面に置いてからでないと押せないことがある
+  a.style.cssText = 'position:fixed; left:-9999px; top:0;';
+  document.body.appendChild(a);
+  a.click();
+  // 【28.3】すぐ片付けない。保存が終わる前に消すと、途中で切れることがある
+  setTimeout(() => {
+    try { a.remove(); URL.revokeObjectURL(url); } catch (err) { /* 片付け損ねても害はない */ }
+  }, 60000);
+}
+
+/** 選べなかったとき、どこに入ったかを伝える文（うそを書かない）。 */
+function 保存先の案内() {
+  return isApplePrintShareDevice()
+    ? '保存しました。「ファイル」アプリの、Safariの設定で決めたダウンロード先（ふつうは「ダウンロード」）に入っています。'
+    : '保存しました。ブラウザのダウンロードのフォルダーに入っています。';
 }
 
 /**
